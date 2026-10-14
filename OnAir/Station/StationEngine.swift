@@ -42,8 +42,9 @@ final class StationEngine: ObservableObject {
     private var isTalking = false
     private var wakeCancelled = false
     private var stationPlaylistID: String?
-    private let initialPlanSize = 12
-    private let refillSize = 6
+    /// Spotify programėlė nemato dainų, pridėtų į jau grojamą grojaraštį,
+    /// todėl iš karto sudarome ilgą (~6 val.) grojaraštį.
+    private let initialPlanSize = 100
 
     init(api: SpotifyAPI, audio: AudioController, voice: DJVoice) {
         self.api = api
@@ -428,24 +429,25 @@ final class StationEngine: ObservableObject {
         trace("Dainų baseinas: \(pool.count)")
     }
 
-    /// Paima kitas dainas: be pasikartojimų, vengiant neseniai grotų
-    /// ir to paties atlikėjo dviejų dainų iš eilės.
+    /// Paima kitas dainas: be pasikartojimų, neseniai grotas dedant į galą
+    /// ir vengiant to paties atlikėjo dviejų dainų iš eilės.
     private func takeNext(count: Int) -> [SpotifyTrack] {
         var candidates = pool.filter { !usedURIs.contains($0.uri) }
-        if candidates.count < count {
+        if candidates.isEmpty {
             trace("Baseinas išsemtas – pradedu ratą iš naujo")
-            let inPlan = Set(plan.suffix(count).map(\.uri))
-            usedURIs = inPlan
-            candidates = pool.filter { !inPlan.contains($0.uri) }
+            usedURIs = Set(plan.suffix(20).map(\.uri))
+            candidates = pool.filter { !usedURIs.contains($0.uri) }
         }
 
-        let fresh = candidates.filter { !recentURIs.contains($0.uri) }
-        var bag = (fresh.count >= count ? fresh : candidates).shuffled()
+        let fresh = candidates.filter { !recentURIs.contains($0.uri) }.shuffled()
+        let recent = candidates.filter { recentURIs.contains($0.uri) }.shuffled()
+        var bag = fresh + recent
 
         var result: [SpotifyTrack] = []
         var lastArtist = plan.last?.primaryArtist
         while result.count < count, !bag.isEmpty {
-            let index = bag.firstIndex { $0.primaryArtist != lastArtist } ?? 0
+            let window = bag.prefix(15)
+            let index = window.firstIndex { $0.primaryArtist != lastArtist } ?? bag.startIndex
             let track = bag.remove(at: index)
             result.append(track)
             usedURIs.insert(track.uri)
@@ -523,6 +525,10 @@ final class StationEngine: ObservableObject {
         } catch SpotifyAPIError.quotaExceeded {
             trace("Kvota viršyta – stebėjimą pristabdau minutei")
             return 60
+        } catch is CancellationError {
+            return 1
+        } catch let error as URLError where error.code == .cancelled {
+            return 1
         } catch {
             trace("Stebėjimo klaida: \(error.localizedDescription)")
             return 8
@@ -532,6 +538,7 @@ final class StationEngine: ObservableObject {
     private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack) async {
         trace("Nauja daina: \(current.name) – \(current.artistNames)")
 
+        let previousIndex = currentIndex
         if let index = planIndex(of: current) {
             currentIndex = index
         } else {
@@ -554,7 +561,10 @@ final class StationEngine: ObservableObject {
             Task { await self.talk(text, label: "Perėjimas") }
         }
 
-        await refillIfNeeded()
+        // Grojaraštis baigėsi ir Spotify įjungė savo „Autoplay“ – paleidžiame naują stoties sąrašą.
+        if currentIndex == nil, let previousIndex, previousIndex >= plan.count - 1 {
+            await rebuildStation()
+        }
     }
 
     /// Randa dainą plane. Spotify kartais groja kitą tos pačios dainos versiją (kitas ID),
@@ -578,19 +588,24 @@ final class StationEngine: ObservableObject {
         DJScript.cleanTitle(track.name).lowercased() + "|" + track.primaryArtist.lowercased()
     }
 
-    /// Kai iki plano pabaigos lieka 3 dainos, į grojaraščio galą pridedame naujų.
-    /// Spotify groja grojaraštį iš eilės, todėl naujos dainos tiesiog tęsia eterį.
-    private func refillIfNeeded() async {
-        guard let index = currentIndex, plan.count - index - 1 <= 3,
-              let playlistID = stationPlaylistID else { return }
-        let more = takeNext(count: refillSize)
-        guard !more.isEmpty else { return }
+    /// Sudaro naują dainų sąrašą, perrašo grojaraštį ir paleidžia jį nuo pradžios.
+    private func rebuildStation() async {
+        trace("Grojaraštis baigėsi – Spotify grojo savo dainas. Paleidžiu naują sąrašą.")
+        let newPlan = takeNext(count: initialPlanSize)
+        guard !newPlan.isEmpty else { return }
         do {
-            try await api.addPlaylistItems(playlistID: playlistID, uris: more.map(\.uri))
-            plan.append(contentsOf: more)
-            trace("Į grojaraštį pridėta dainų: \(more.count)")
+            let playlist = try await prepareStationPlaylist(uris: newPlan.map(\.uri))
+            stationPlaylistID = playlist.id
+            plan = newPlan
+            currentIndex = 0
+            try? await Task.sleep(for: .milliseconds(800))
+            try await api.playContext(playlist.uri, position: 0, deviceID: deviceID)
+            let ok = await waitForPlayback(matching: { state in
+                state.isPlaying && (state.context?.uri?.hasSuffix(playlist.id) ?? false)
+            }) != nil
+            trace(ok ? "Naujas sąrašas groja" : "Naujo sąrašo patvirtinimo nesulaukta")
         } catch {
-            trace("Į grojaraštį pridėti nepavyko: \(error.localizedDescription)")
+            trace("Naujo sąrašo paleisti nepavyko: \(error.localizedDescription)")
         }
     }
 }

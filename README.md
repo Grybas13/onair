@@ -105,7 +105,7 @@ Jei 3 testas neveikia, nustatymuose pabandyk „Kai DJ kalba → Sustabdyti muzi
 - **Kad veiktų užrakintu ekranu,** OnAir fone groja tylą. Kitaip iOS programėlę užmigdytų.
 - **Grojaraštis „OnAir Radio“.** Spotify iPhone programėlė nuo 2026 rudens nebepaleidžia per API atsiųstų „plikų“ dainų sąrašų, tik grojaraščius ar albumus. Todėl OnAir tavo bibliotekoje laiko privatų grojaraštį „OnAir Radio“ ir prieš kiekvieną eterį jį perrašo. Jo netrinkite – o jei ištrinsite, OnAir sukurs naują.
 - **Jei Spotify telefone miega,** OnAir trumpam atidaro Spotify programėlę, kad ji pabustų, ir tada paleidžia stotį.
-- **Dainų parinkimas.** OnAir paima tavo „Top“ dainas (4 sav., 6 mėn., visų laikų). Vengia dainų, kurias neseniai klausei, o to paties atlikėjo nededa dviejų iš eilės. Kai iki sąrašo pabaigos lieka 3 dainos, į grojaraštį prideda dar 6.
+- **Dainų parinkimas.** OnAir paima tavo „Top“ dainas (4 sav., 6 mėn., visų laikų). Vengia dainų, kurias neseniai klausei, o to paties atlikėjo nededa dviejų iš eilės. Grojaraštis iš karto sudaromas ~100 dainų (~6 val.). Jei jis vis tiek baigiasi ir Spotify įjungia savo „Autoplay“, OnAir tai pastebi ir paleidžia naują sąrašą.
 
 ## Projekto struktūra
 
