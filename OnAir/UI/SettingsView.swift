@@ -11,7 +11,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.talkMode) private var talkMode = "duck"
     @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "groq"
     @AppStorage(SettingsKeys.groqVoice) private var groqVoice = GroqSpeech.defaultVoice
+    @AppStorage(DJIdentity.key) private var djName = ""
     @State private var diagnosis: String?
+    @State private var backgroundTestRunning = false
     @State private var isDiagnosing = false
 
     @State private var voices: [AVSpeechSynthesisVoice] = []
@@ -20,17 +22,24 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper(value: $talkEvery, in: 1...6) {
-                        Text("Dėdis įsijungia po \(talkEveryPhrase)")
+                    HStack {
+                        Text("Vardas")
+                        TextField(DJIdentity.defaultName, text: $djName)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
                     }
-                    Picker("Kai Dėdis kalba", selection: $talkMode) {
+                    Stepper(value: $talkEvery, in: 1...6) {
+                        Text("Kalba po \(talkEveryPhrase)")
+                    }
+                    Picker("Kai DJ kalba", selection: $talkMode) {
                         Text("Patylinti muziką").tag("duck")
                         Text("Sustabdyti muziką").tag("pause")
                     }
                 } header: {
-                    Text("Dėdis")
+                    Text("DJ")
                 } footer: {
-                    Text("„Patylinti“ – kaip tikrame radijuje, Dėdis kalba ant dainos pradžios. Jei patylinimas neveikia, rinkis „Sustabdyti“.")
+                    Text("Vardą DJ naudoja kalbėdamas (angliškas vardas tariamas geriausiai). „Patylinti“ – kaip tikrame radijuje, DJ kalba ant dainos pradžios.")
                 }
 
                 Section {
@@ -71,10 +80,29 @@ struct SettingsView: View {
                     } label: {
                         Label("Išbandyti balsą", systemImage: "speaker.wave.2.fill")
                     }
+
+                    Button {
+                        Task {
+                            backgroundTestRunning = true
+                            await engine.backgroundTest()
+                            backgroundTestRunning = false
+                        }
+                    } label: {
+                        HStack {
+                            Label("Fono testas", systemImage: "lock.fill")
+                            if backgroundTestRunning {
+                                Spacer()
+                                Text("Užrakink telefoną…")
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.muted)
+                            }
+                        }
+                    }
+                    .disabled(backgroundTestRunning)
                 } header: {
                     Text("Balsas")
                 } footer: {
-                    Text("Orpheus – gyvas, emocingas balsas Groq debesyje (tas pats Groq raktas). Nemokamai ~100 pasisakymų per dieną; pasiekus limitą Dėdis kalba Apple balsu. Natūralesnį Apple balsą galima atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English (Enhanced / Premium). Kalbėjimo greitis taikomas tik Apple balsui.")
+                    Text("Orpheus – gyvas, emocingas balsas Groq debesyje (tas pats Groq raktas). Nemokamai ~100 pasisakymų per dieną; pasiekus limitą DJ kalba Apple balsu. Natūralesnį Apple balsą galima atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English (Enhanced / Premium). Kalbėjimo greitis taikomas tik Apple balsui. „Fono testas“: paspausk ir per 15 s užrakink telefoną – DJ turi prabilti.")
                 }
 
                 Section("Spotify") {
@@ -90,7 +118,7 @@ struct SettingsView: View {
 
                 Section("Paslaugos") {
                     statusRow("Last.fm (vibe, atradimai)", ok: !Config.lastFMAPIKey.isEmpty)
-                    statusRow("Groq (Dėdžio tekstai ir balsas)", ok: !Config.groqAPIKey.isEmpty)
+                    statusRow("Groq (DJ tekstai ir balsas)", ok: !Config.groqAPIKey.isEmpty)
                     Button {
                         Task {
                             isDiagnosing = true

@@ -62,7 +62,7 @@ struct StationView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Stotis išjungta")
                     .font(.title3.bold())
-                Text("Dėdis sudarys sąrašą iš tavo mėgstamų Spotify dainų, įmes naujų atradimų ir kas kelias dainas pasakys, ką apie tave galvoja.")
+                Text("\(DJIdentity.name) sudarys sąrašą iš tavo mėgstamų Spotify dainų, įmes naujų atradimų ir kas kelias dainas pasakys, ką apie tave galvoja.")
                     .foregroundStyle(Theme.muted)
                 primaryButton("Įjungti stotį", systemImage: "play.fill") {
                     Task { await engine.start() }
@@ -87,7 +87,7 @@ struct StationView: View {
                     Text("Žadinu Spotify…")
                         .font(.headline)
                 }
-                Text("Spotify programėlė miegojo, todėl ją atidarėme. Kai muzika pradės groti ir Dėdis prabils, grįžk į OnAir (viršuje kairėje „◀ OnAir“).")
+                Text("Spotify programėlė miegojo, todėl ją atidarėme. Kai muzika pradės groti ir DJ prabils, grįžk į OnAir (viršuje kairėje „◀ OnAir“).")
                     .foregroundStyle(Theme.muted)
                 Button("Atšaukti") {
                     engine.cancelWake()
@@ -272,7 +272,7 @@ struct StationView: View {
                     .foregroundStyle(Theme.accent)
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Dėdis eteryje")
+                    Text("\(DJIdentity.name) eteryje")
                         .font(.caption.bold())
                         .foregroundStyle(Theme.accent)
                     Text(text)
@@ -295,7 +295,7 @@ struct StationView: View {
             controlButton("forward.fill", label: "Praleisti") {
                 Task { await engine.skip() }
             }
-            controlButton("mic.fill", label: "Dėdis") {
+            controlButton("mic.fill", label: "DJ") {
                 Task { await engine.talkNow() }
             }
             controlButton("stop.fill", label: "Išjungti") {
@@ -314,7 +314,7 @@ struct StationView: View {
                     .font(.headline)
                 Spacer()
                 if engine.tracksUntilTalk > 0 {
-                    Text("Dėdis po \(engine.tracksUntilTalk) d.")
+                    Text("DJ po \(engine.tracksUntilTalk) d.")
                         .font(.caption)
                         .foregroundStyle(Theme.muted)
                 }
@@ -331,7 +331,7 @@ struct StationView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "mic.fill")
                             .font(.caption)
-                        Text("Dėdis eteryje")
+                        Text("\(DJIdentity.name) eteryje")
                             .font(.caption.bold())
                         Spacer()
                     }

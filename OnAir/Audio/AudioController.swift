@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 
 /// Valdo programėlės garso sesiją:
 /// 1) „fono palaikymas“ – groja tylą, kad iOS neužmigdytų programėlės, kol veikia stotis;
@@ -86,6 +87,10 @@ final class AudioController {
             return
         }
         let buffers = [converted]
+        let seconds = Double(converted.frameLength) / converted.format.sampleRate
+        let appState = UIApplication.shared.applicationState == .background ? "fone" : "ekrane"
+        trace(String(format: "Audio: groju balsą %.1f s (programėlė %@, variklis %@, patylinta: %@)",
+                     seconds, appState, engine.isRunning ? "veikia" : "SUSTOJĘS", isDucking ? "taip" : "ne"))
         do {
             if !engine.isRunning {
                 try AVAudioSession.sharedInstance().setActive(true)
@@ -172,7 +177,8 @@ final class AudioController {
         guard !isDucking else { return }
         isDucking = true
         reconfigure(duck: true)
-        trace("Audio: Spotify patylintas")
+        let session = AVAudioSession.sharedInstance()
+        trace("Audio: Spotify patylintas (kitas garsas groja: \(session.isOtherAudioPlaying ? "taip" : "ne"), variklis: \(engine.isRunning ? "veikia" : "SUSTOJĘS"))")
     }
 
     /// Grąžina normalų Spotify garsą.

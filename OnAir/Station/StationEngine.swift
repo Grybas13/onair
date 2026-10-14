@@ -50,6 +50,7 @@ final class StationEngine: ObservableObject {
     private var stationPlaylistID: String?
     private var stationPlaylistURI: String?
     private var lastHeartbeat = Date.distantPast
+    private var idleSince: Date?
 
     /// Iš anksto paruoštas Dėdžio perėjimas (tekstas + balsas), kad prabiltų be pauzės.
     private struct PreparedSegment {
@@ -581,6 +582,23 @@ final class StationEngine: ObservableObject {
         return result
     }
 
+    /// Fono testas: po 15 s DJ prabyla – per tą laiką reikia užrakinti telefoną.
+    func backgroundTest() async {
+        let wasRunning = audio.isKeepAliveRunning
+        audio.startKeepAlive()
+        trace("Fono testas: užrakink telefoną – po 15 s \(DJIdentity.name) prabils")
+        try? await Task.sleep(for: .seconds(15))
+        let where_ = UIApplication.shared.applicationState == .background ? "fone" : "ekrane"
+        trace("Fono testas: kalbu (programėlė \(where_))")
+        await talk(
+            text: "[whisper] Background test. If you can hear me with the screen locked, everything works. Unlock and tell your developer.",
+            label: "Fono testas"
+        )
+        if !wasRunning && phase != .onAir {
+            audio.stopKeepAlive()
+        }
+    }
+
     /// Kai programėlė grįžta į ekraną – greitai atnaujinti būseną.
     func refreshSoon() {
         guard phase == .onAir else { return }
@@ -610,9 +628,10 @@ final class StationEngine: ObservableObject {
     }
 
     /// Pasako tekstą: patylina Spotify, groja balsą per savo garso variklį, grąžina garsą.
-    private func perform(_ text: String, label: String, buffers: [AVAudioPCMBuffer]?) async {
+    private func perform(_ rawText: String, label: String, buffers: [AVAudioPCMBuffer]?) async {
+        let text = DJIdentity.personalize(rawText)
         onMicText = GroqSpeech.stripTags(text)
-        trace("Dėdis [\(label)]: \(text)")
+        trace("\(DJIdentity.name) [\(label)]: \(text)")
 
         let backgroundTask = BackgroundTaskHolder()
         backgroundTask.id = UIApplication.shared.beginBackgroundTask(withName: "OnAir DJ") {
@@ -726,7 +745,7 @@ final class StationEngine: ObservableObject {
         do {
             guard let state = try await api.playbackState(), let item = state.item else {
                 isPlaying = false
-                return 5
+                return await handleIdle()
             }
 
             nowPlaying = item
@@ -741,12 +760,15 @@ final class StationEngine: ObservableObject {
                 await handleTrackChange(from: previous, to: item, progressMs: state.progressMs ?? 0)
             }
 
-            guard state.isPlaying else { return 5 }
+            guard state.isPlaying else { return await handleIdle() }
+            idleSince = nil
             let remaining = Double(item.durationMs - (state.progressMs ?? 0)) / 1000
             if remaining < 32 && remaining > 3 {
                 prefetchHandoffIfNeeded()
             }
-            if remaining > 17 { return 15 }
+            // Bateriją taupome: dainos viduryje tikriname retai, prie pabaigos – tiksliai.
+            if remaining > 32 { return min(25, remaining - 28) }
+            if remaining > 17 { return remaining - 15 }
             return max(0.8, remaining + 0.7)
         } catch SpotifyAPIError.rateLimited(let seconds) {
             return Double(max(seconds, 5))
@@ -761,6 +783,18 @@ final class StationEngine: ObservableObject {
             trace("Stebėjimo klaida: \(error.localizedDescription)")
             return 8
         }
+    }
+
+    /// Kai Spotify negroja: tikriname rečiau, o po 10 min. stotis užmiega (kad neiškrautų baterijos).
+    private func handleIdle() async -> Double {
+        let now = Date()
+        if idleSince == nil { idleSince = now }
+        if let since = idleSince, now.timeIntervalSince(since) > 10 * 60, phase == .onAir {
+            trace("Spotify negroja 10 min. – stotis užmiega, kad taupytų bateriją")
+            await stop(pauseSpotify: false)
+            return 60
+        }
+        return 15
     }
 
     private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack, progressMs: Int) async {

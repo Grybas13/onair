@@ -25,3 +25,20 @@ enum SettingsKeys {
         ])
     }
 }
+
+/// DJ vardas (keičiamas nustatymuose). Paprastas angliškas, kad balsas taisyklingai ištartų.
+enum DJIdentity {
+    static let key = "djName"
+    static let defaultName = "Uncle Dee"
+
+    static var name: String {
+        let value = (UserDefaults.standard.string(forKey: key) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? defaultName : value
+    }
+
+    /// Senas vardas „Dėdis“ tekstuose pakeičiamas dabartiniu.
+    static func personalize(_ text: String) -> String {
+        text.replacingOccurrences(of: "Dėdžio", with: "\(name)'s")
+            .replacingOccurrences(of: "Dėdis", with: name)
+    }
+}
