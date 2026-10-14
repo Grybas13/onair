@@ -1,0 +1,82 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-ipa
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | grep -v -i beta | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        run: |
+          if [ -z "$SPOTIFY_CLIENT_ID" ]; then
+            echo "::warning::SPOTIFY_CLIENT_ID secret is not set - app will build, but login will not work."
+          fi
+          set -o pipefail
+          xcodebuild \
+            -project OnAir.xcodeproj \
+            -scheme OnAir \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            SPOTIFY_CLIENT_ID="$SPOTIFY_CLIENT_ID" \
+            build 2>&1 | tee build.log
+
+      - name: Report compiler errors and warnings
+        if: always()
+        run: |
+          if [ -f build.log ]; then
+            grep -E "error:" build.log | sort -u | head -40 | while IFS= read -r line; do echo "::error::$line"; done
+            grep -E "warning:" build.log | grep -v "ld: warning" | sort -u | head -40 | while IFS= read -r line; do echo "::warning::$line"; done
+          fi
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/OnAir.app Payload/
+          zip -qry OnAir.ipa Payload
+          ls -lh OnAir.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: OnAir-ipa
+          path: OnAir.ipa
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7

@@ -1,0 +1,13 @@
+# Generuojama XcodeGen
+OnAir.xcodeproj/
+OnAir/Info.plist
+
+# Kompiliavimo rezultatai
+build/
+Payload/
+*.ipa
+build.log
+DerivedData/
+
+.DS_Store
+xcuserdata/

@@ -1,0 +1,50 @@
+# XcodeGen projekto aprašas. Projektas generuojamas automatiškai GitHub Actions
+# (.github/workflows/build.yml). Mac'e ranka: brew install xcodegen && xcodegen
+
+name: OnAir
+
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  OnAir:
+    type: application
+    platform: iOS
+    sources:
+      - path: OnAir
+    scheme: {}
+    info:
+      path: OnAir/Info.plist
+      properties:
+        CFBundleDisplayName: OnAir
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SpotifyClientID: $(SPOTIFY_CLIENT_ID)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Dark
+        # Leidžia programėlei veikti fone (DJ balsas, eilės sekimas).
+        UIBackgroundModes:
+          - audio
+        # Leidžia atidaryti Spotify programėlę.
+        LSApplicationQueriesSchemes:
+          - spotify
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: lt.grybas13.onair
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: YES
+        SPOTIFY_CLIENT_ID: ""
