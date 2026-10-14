@@ -68,6 +68,19 @@ final class DedisWriter {
         return fallback
     }
 
+    /// Groq teksto patikrinimas (nustatymų mygtukas „Patikrinti Groq“).
+    func diagnose() async -> String {
+        let started = Date()
+        if let reply = await groq.complete(
+            system: "You are a radio DJ. Reply with one short sentence.",
+            user: "Say hi to the listener in under 12 words."
+        ) {
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            return "✅ Tekstas (\(groq.lastModel ?? "?"), \(ms) ms): \(reply)"
+        }
+        return "❌ Tekstas: \(groq.lastError ?? "Groq laikinai išjungtas (limitas ar klaida) – žr. žurnalą")"
+    }
+
     private func remember(_ line: String) {
         recentLines.append(line)
         if recentLines.count > 4 { recentLines.removeFirst() }
@@ -138,7 +151,11 @@ final class DedisWriter {
     not a playlist read-out. Mention at most ONE song title per break, often none. Artist names are fine.
     Use ONLY the facts you are given. Never invent numbers, stats, dates or facts about artists.
 
-    Format: 1 to 3 short sentences, at most 45 words. Natural spoken English with contractions. No emojis, hashtags, \
+    Voice: your words are spoken by an expressive TTS voice. You may start with ONE delivery tag in square brackets, \
+    chosen only from: [excited], [cheerful], [dramatic], [whisper], [menacing whisper], [authoritatively]. Use it when it \
+    makes the bit funnier (e.g. [whisper] for a secret roast, [dramatic] for fake outrage). Never invent other tags.
+
+    Format: 1 to 3 short sentences, at most 30 words and 180 characters in total. Natural spoken English with contractions. No emojis, hashtags, \
     stage directions, asterisks, quotation marks or lists. Do not start with "Alright", "Well" or "Ladies and gentlemen". \
     Do not greet him unless it is the opening of the show. Vary your openings and don't repeat your recent lines.
     """
@@ -221,7 +238,8 @@ final class DedisWriter {
     static func clean(_ raw: String) -> String? {
         var text = raw
         text = text.replacingOccurrences(of: #"\*[^*]*\*"#, with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: #"\[[^\]]*\]"#, with: "", options: .regularExpression)
+        // Leistinas intonacijų žymes paliekame (Orpheus jas supranta), kitas laužtinius skliaustus išmetame.
+        text = GroqSpeech.sanitizeTags(text)
         text = text.replacingOccurrences(of: #"\([^)]*(laugh|music|pause|sigh|chuckle)[^)]*\)"#, with: "", options: [.regularExpression, .caseInsensitive])
         for symbol in ["\"", "“", "”", "#"] {
             text = text.replacingOccurrences(of: symbol, with: "")
@@ -232,7 +250,7 @@ final class DedisWriter {
         text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if text.count > 320, let cut = text.prefix(320).lastIndex(where: { ".!?".contains($0) }) {
+        if text.count > 260, let cut = text.prefix(260).lastIndex(where: { ".!?".contains($0) }) {
             text = String(text[...cut])
         }
         return text.count >= 3 ? text : nil

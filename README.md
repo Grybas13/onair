@@ -121,14 +121,12 @@ OnAir/
 └─ Support/    Žurnalas, Keychain
 ```
 
-## Kokoro balsas
+## Dėdžio balsas
 
-Dėdis gali kalbėti neuroniniu **Kokoro** balsu, kuris veikia pačiame telefone, be interneto ir be limitų.
+Numatytasis balsas yra **Groq Orpheus**: gyvas, emocingas balsas Groq debesyje, naudojantis tą patį `GROQ_API_KEY`. Dėdis gali keisti intonaciją žymėmis, pvz. `[excited]`, `[whisper]` ar `[dramatic]`.
 
-1. **Nustatymai → Balsas → Balso variklis: Kokoro.**
-2. Spausk **„Atsisiųsti balso modelį (327 MB)“**, geriausia per Wi-Fi. Tai reikia padaryti tik vieną kartą: modelis išlieka ir perdiegus programėlę.
-3. Pasirink balsą (pvz. „Michael“, „Fenrir“, „Puck“) ir spausk **„Išbandyti balsą“**.
+- Nemokamas planas leidžia ~100 pasisakymų per dieną. Pasiekus limitą, Dėdis iki kitos dienos kalba Apple balsu.
+- **Nustatymai → Balsas** leidžia pasirinkti Orpheus balsą (Troy, Austin, Daniel…) arba visai perjungti į Apple.
+- **Nustatymai → Paslaugos → „Patikrinti Groq“** patikrina tekstą ir balsą ir parodo tikslią klaidą, jei kas neveikia.
 
-Kol modelis neatsisiųstas, Dėdis kalba Apple balsu. Kokoro veikia tik procesoriumi, nes iOS neleidžia naudoti vaizdo plokštės užrakintu ekranu.
-
-Kokoro-82M modelis ir balsų stiliai – [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0); Swift versija – [mlalma/kokoro-ios](https://github.com/mlalma/kokoro-ios) (MIT).
+Kokoro balsas telefone buvo išbandytas ir pašalintas: procesoriumi jis per lėtas, o vaizdo plokšte telefone užlūžta.

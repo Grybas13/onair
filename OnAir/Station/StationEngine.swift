@@ -97,7 +97,6 @@ final class StationEngine: ObservableObject {
         wakeCancelled = false
         prepared = nil
         trace("Stotis: paleidžiama (vibe: \(currentVibe.title))")
-        voice.warmUp()
 
         do {
             try await loadPool()
@@ -560,6 +559,27 @@ final class StationEngine: ObservableObject {
         await talk(text: DJScript.voiceTest, label: "Balso testas")
     }
 
+    /// Patikrina Groq tekstą ir Orpheus balsą; balso pavyzdį iškart sugroja.
+    func diagnoseGroq() async -> String {
+        var lines: [String] = []
+        lines.append(await writer.diagnose())
+
+        let sample = "[excited] Dėdis here, testing the new voice. If you can hear me, we're in business."
+        let started = Date()
+        if let buffers = await GroqSpeech.shared.synthesize(sample), !buffers.isEmpty {
+            let seconds = buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }
+            lines.append(String(format: "✅ Balsas: %.1f s garso per %.1f s", seconds, Date().timeIntervalSince(started)))
+            await talk(text: sample, label: "Groq testas", buffers: buffers)
+        } else {
+            let reason = GroqSpeech.shared.lastError
+                ?? (Config.groqAPIKey.isEmpty ? "Nėra GROQ_API_KEY" : "laikinai išjungta po klaidos ar limito – žr. žurnalą")
+            lines.append("❌ Balsas: \(reason)")
+        }
+        let result = lines.joined(separator: "\n")
+        trace("Groq testas: " + result.replacingOccurrences(of: "\n", with: " | "))
+        return result
+    }
+
     /// Kai programėlė grįžta į ekraną – greitai atnaujinti būseną.
     func refreshSoon() {
         guard phase == .onAir else { return }
@@ -590,7 +610,7 @@ final class StationEngine: ObservableObject {
 
     /// Pasako tekstą: patylina Spotify, groja balsą per savo garso variklį, grąžina garsą.
     private func perform(_ text: String, label: String, buffers: [AVAudioPCMBuffer]?) async {
-        onMicText = text
+        onMicText = GroqSpeech.stripTags(text)
         trace("Dėdis [\(label)]: \(text)")
 
         let backgroundTask = BackgroundTaskHolder()

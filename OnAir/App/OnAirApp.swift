@@ -10,8 +10,7 @@ struct OnAirApp: App {
         // Pirmiausia žurnalas – kad perimtų ankstesnės sesijos (galbūt užlūžusios) eilutes.
         _ = AppLog.shared
         SettingsKeys.registerDefaults()
-        KokoroCrashGuard.checkAtLaunch()
-        KokoroEngine.configureCPUOnly()
+        LegacyCleanup.removeKokoroFiles()
         let auth = SpotifyAuth()
         let api = SpotifyAPI(auth: auth)
         let store = ListeningStore()
@@ -71,5 +70,22 @@ struct MainTabs: View {
                 .tabItem { Label("Žurnalas", systemImage: "list.bullet.rectangle") }
         }
         .tint(Theme.accent)
+    }
+}
+
+/// Kokoro balsas pašalintas (telefone užlūždavo) – ištriname jo 327 MB modelį ir žymes.
+enum LegacyCleanup {
+    static func removeKokoroFiles() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        for name in ["Kokoro", "kokoro-in-progress.txt"] {
+            let url = support.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+                trace("Pašalinti seni Kokoro failai: \(name)")
+            }
+        }
+        for key in ["voiceEngine", "kokoroVoice", "kokoroCrashedStage"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 }

@@ -9,10 +9,10 @@ enum SettingsKeys {
     static let speechRate = "speechRate"
     /// "duck" – patylinti Spotify kol DJ kalba; "pause" – sustabdyti Spotify kol DJ kalba.
     static let talkMode = "talkMode"
-    /// "kokoro" – neuroninis balsas telefone; "apple" – Apple sistemos balsas.
-    static let voiceEngine = "voiceEngine"
-    /// Kokoro balso ID (pvz. "am_michael").
-    static let kokoroVoice = "kokoroVoice"
+    /// "groq" – Groq Orpheus balsas (debesyje); "apple" – Apple sistemos balsas.
+    static let voiceEngine = "voiceEngine2"
+    /// Groq Orpheus balso ID (pvz. "troy").
+    static let groqVoice = "groqVoice"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -20,8 +20,8 @@ enum SettingsKeys {
             voiceID: "",
             speechRate: 0.5,
             talkMode: "duck",
-            voiceEngine: "kokoro",
-            kokoroVoice: KokoroEngine.defaultVoice
+            voiceEngine: "groq",
+            groqVoice: GroqSpeech.defaultVoice
         ])
     }
 }

@@ -62,7 +62,7 @@ enum DedisTemplates {
             { _ in "Switching to chill. Bold move for someone so stressed. Breathe, nephew." }
         ],
         .energy: [
-            { _ in "Energy mode. If you're not moving in ten seconds, I'm calling your mother." },
+            { _ in "[excited] Energy mode. If you're not moving in ten seconds, I'm calling your mother." },
             { _ in "Oh, we're doing energy now? Hell yes. Get off the couch, you lazy bastard." }
         ],
         .focus: [
@@ -70,11 +70,11 @@ enum DedisTemplates {
             { _ in "Focus, huh. Fine. Put the phone down and stop pretending you're busy." }
         ],
         .party: [
-            { _ in "Party mode. Doesn't matter if it's just you and the fridge. Let's fucking go." },
+            { _ in "[excited] Party mode. Doesn't matter if it's just you and the fridge. Let's fucking go." },
             { f in "It's \(f.time) on a \(f.day) and you want a party. Love that for you. Turn it up." }
         ],
         .feels: [
-            { _ in "Feels mode. Who hurt you? Actually, don't answer. Tissues on the left." },
+            { _ in "[whisper] Feels mode. Who hurt you? Actually, don't answer. Tissues on the left." },
             { _ in "Sad songs, huh. Somebody left you on read. Uncle's here. Let it out." }
         ],
         .throwback: [
@@ -98,7 +98,7 @@ enum DedisTemplates {
     // MARK: - ❤️ / 👎
 
     static let dislikes: [Line] = [
-        { _ in "Yeah, that was trash. Gone. Never again." },
+        { _ in "[dramatic] Yeah, that was trash. Gone. Never again." },
         { _ in "Thumbs down, noted. That song is dead to us." },
         { f in f.previousArtist.map { "Sorry \($0), my nephew has spoken. Next." } },
         { _ in "Harsh. Correct, but harsh. Moving on." }

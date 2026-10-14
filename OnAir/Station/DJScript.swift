@@ -71,7 +71,7 @@ enum DJScript {
         ].randomElement()!
     }
 
-    static let voiceTest = "Testing, testing. This is your DJ on OnAir. If Spotify just got quieter, the talk-over works."
+    static let voiceTest = "[cheerful] Testing, testing. Dėdis on OnAir. If Spotify just got quieter, the talk-over works."
 
     // MARK: - Pagalbinės
 

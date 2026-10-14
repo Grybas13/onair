@@ -9,10 +9,10 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.voiceID) private var voiceID = ""
     @AppStorage(SettingsKeys.speechRate) private var speechRate = 0.5
     @AppStorage(SettingsKeys.talkMode) private var talkMode = "duck"
-    @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "kokoro"
-    @AppStorage(SettingsKeys.kokoroVoice) private var kokoroVoice = KokoroEngine.defaultVoice
-    @AppStorage(KokoroCrashGuard.crashedStageKey) private var kokoroCrashedStage = ""
-    @ObservedObject private var kokoroModel = KokoroModelStore.shared
+    @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "groq"
+    @AppStorage(SettingsKeys.groqVoice) private var groqVoice = GroqSpeech.defaultVoice
+    @State private var diagnosis: String?
+    @State private var isDiagnosing = false
 
     @State private var voices: [AVSpeechSynthesisVoice] = []
 
@@ -35,34 +35,26 @@ struct SettingsView: View {
 
                 Section {
                     Picker("Balso variklis", selection: $voiceEngine) {
-                        Text("Kokoro (neuroninis)").tag("kokoro")
+                        Text("Groq Orpheus (gyvas)").tag("groq")
                         Text("Apple").tag("apple")
                     }
 
-                    if !kokoroCrashedStage.isEmpty {
-                        Text("Kokoro anksčiau užlūžo („\(kokoroCrashedStage)“), todėl įjungtas Apple balsas. Atsiųsk žurnalą – pataisysiu.")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-
-                    if voiceEngine == "kokoro" {
-                        kokoroModelRow
-                        Picker("Kokoro balsas", selection: $kokoroVoice) {
-                            ForEach(KokoroEngine.voiceNames) { voice in
+                    if voiceEngine == "groq" {
+                        Picker("Orpheus balsas", selection: $groqVoice) {
+                            ForEach(GroqSpeech.voices) { voice in
                                 Text(voice.title).tag(voice.id)
                             }
                         }
-                        .pickerStyle(.navigationLink)
-                    } else {
-                        Picker("Apple balsas", selection: $voiceID) {
-                            Text("Automatiškai (geriausias)").tag("")
-                            ForEach(voices, id: \.identifier) { voice in
-                                Text("\(voice.name) · \(voice.language) · \(DJVoice.qualityLabel(voice))")
-                                    .tag(voice.identifier)
-                            }
-                        }
-                        .pickerStyle(.navigationLink)
                     }
+
+                    Picker("Atsarginis Apple balsas", selection: $voiceID) {
+                        Text("Automatiškai (geriausias)").tag("")
+                        ForEach(voices, id: \.identifier) { voice in
+                            Text("\(voice.name) · \(voice.language) · \(DJVoice.qualityLabel(voice))")
+                                .tag(voice.identifier)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Kalbėjimo greitis")
@@ -82,11 +74,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Balsas")
                 } footer: {
-                    if voiceEngine == "kokoro" {
-                        Text("Kokoro – neuroninis balsas, veikiantis pačiame telefone, be interneto ir be limitų. Modelį (327 MB) reikia atsisiųsti vieną kartą, geriausia per Wi-Fi. Kol jo nėra, Dėdis kalba Apple balsu.")
-                    } else {
-                        Text("Natūralesnius Apple balsus galima nemokamai atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English. Rinkis „Enhanced“ arba „Premium“.")
-                    }
+                    Text("Orpheus – gyvas, emocingas balsas Groq debesyje (tas pats Groq raktas). Nemokamai ~100 pasisakymų per dieną; pasiekus limitą Dėdis kalba Apple balsu. Natūralesnį Apple balsą galima atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English (Enhanced / Premium). Kalbėjimo greitis taikomas tik Apple balsui.")
                 }
 
                 Section("Spotify") {
@@ -102,69 +90,40 @@ struct SettingsView: View {
 
                 Section("Paslaugos") {
                     statusRow("Last.fm (vibe, atradimai)", ok: !Config.lastFMAPIKey.isEmpty)
-                    statusRow("Groq (Dėdžio tekstai)", ok: !Config.groqAPIKey.isEmpty)
+                    statusRow("Groq (Dėdžio tekstai ir balsas)", ok: !Config.groqAPIKey.isEmpty)
+                    Button {
+                        Task {
+                            isDiagnosing = true
+                            diagnosis = await engine.diagnoseGroq()
+                            isDiagnosing = false
+                        }
+                    } label: {
+                        HStack {
+                            Label("Patikrinti Groq", systemImage: "stethoscope")
+                            if isDiagnosing {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isDiagnosing)
+                    if let diagnosis {
+                        Text(diagnosis)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.muted)
+                            .textSelection(.enabled)
+                    }
                 }
 
                 Section {
-                    Text("OnAir 0.3 · 3 etapas")
+                    Text("OnAir 0.4")
                         .foregroundStyle(Theme.muted)
                 }
             }
             .navigationTitle("Nustatymai")
-            .onChange(of: voiceEngine) { _, newValue in
-                if newValue == "kokoro" { kokoroCrashedStage = "" }
-            }
+
             .onAppear {
                 voices = DJVoice.englishVoices()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var kokoroModelRow: some View {
-        switch kokoroModel.state {
-        case .ready:
-            HStack {
-                Text("Modelis")
-                Spacer()
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.spotifyGreen)
-                Text("Paruoštas")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.muted)
-            }
-        case .missing:
-            Button {
-                kokoroModel.download()
-            } label: {
-                Label("Atsisiųsti balso modelį (327 MB)", systemImage: "arrow.down.circle.fill")
-            }
-        case .downloading(let progress):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Siunčiama…")
-                    Spacer()
-                    Text("\(Int(progress * 100)) %")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(Theme.muted)
-                }
-                ProgressView(value: progress)
-                    .tint(Theme.accent)
-                Button("Atšaukti", role: .cancel) {
-                    kokoroModel.cancel()
-                }
-                .font(.footnote)
-            }
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Nepavyko: \(message)")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                Button {
-                    kokoroModel.download()
-                } label: {
-                    Label("Bandyti dar kartą", systemImage: "arrow.clockwise")
-                }
             }
         }
     }

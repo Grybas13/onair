@@ -24,9 +24,6 @@ jobs:
           sudo xcode-select -s "$XCODE"
           xcodebuild -version
 
-      - name: Install Metal toolchain (needed by MLX)
-        run: xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain download skipped"
-
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -100,7 +97,6 @@ jobs:
           echo "Size: $(du -sh $APP | cut -f1)"
           echo "Frameworks:"; ls $APP/Frameworks 2>/dev/null || echo "(none)"
           echo "Metal libraries:"; find $APP -name "*.metallib" | sed "s|$APP/||" || true
-          echo "Voices: $(ls -la $APP/voices.npz 2>/dev/null | awk '{print $5}')"
           # Kiekviena @rpath biblioteka turi būti įdėta, kitaip programėlė nepasileis.
           MISSING=0
           for LIB in $(otool -L $APP/OnAir | awk '/@rpath/ {print $1}'); do
@@ -110,7 +106,6 @@ jobs:
               MISSING=1
             fi
           done
-          if [ ! -e "$APP/voices.npz" ]; then echo "::error::voices.npz is not in the app bundle"; MISSING=1; fi
           [ $MISSING -eq 0 ] || exit 1
           for KEY in SpotifyClientID LastFMAPIKey GroqAPIKey; do
             LEN=$($PB -c "Print :$KEY" $APP/Info.plist | tr -d '\n' | wc -c | tr -d ' ')

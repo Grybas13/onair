@@ -51,42 +51,15 @@ final class DJVoice: NSObject, ObservableObject {
         return await task.value
     }
 
-    /// Ar naudoti Kokoro (pasirinkta ir modelis atsisiųstas).
-    static var usesKokoro: Bool {
-        UserDefaults.standard.string(forKey: SettingsKeys.voiceEngine) == "kokoro" && KokoroModelStore.isModelReady
-    }
-
-    /// Iš anksto įkelia Kokoro modelį, kad pirmas Dėdžio sakinys nevėluotų.
-    func warmUp() {
-        guard Self.usesKokoro, !KokoroEngine.shared.isLoaded else { return }
-        Task.detached(priority: .utility) {
-            _ = KokoroEngine.shared.loadIfNeeded()
-        }
-    }
-
-    private var loggedBackgroundFallback = false
-
     private func renderNow(_ text: String) async -> [AVAudioPCMBuffer] {
-        // Kokoro (MLX) greitas tik su GPU, o GPU iOS leidžia tik programėlei esant ekrane.
-        // Fone (užrakintas ekranas) kol kas kalba Apple balsas.
-        let inForeground = UIApplication.shared.applicationState == .active
-        if Self.usesKokoro && inForeground {
-            loggedBackgroundFallback = false
-            let voiceID = UserDefaults.standard.string(forKey: SettingsKeys.kokoroVoice) ?? KokoroEngine.defaultVoice
-            let rate = UserDefaults.standard.double(forKey: SettingsKeys.speechRate)
-            let speed = Float(0.92 + ((rate > 0 ? rate : 0.5) - 0.5) * 2.5)
-            let samples = await Task.detached(priority: .userInitiated) {
-                KokoroEngine.shared.synthesize(text, voice: voiceID, speed: speed, useGPU: true)
-            }.value
-            if let samples, let buffer = KokoroEngine.buffer(from: samples) {
-                return [buffer]
+        let engine = UserDefaults.standard.string(forKey: SettingsKeys.voiceEngine) ?? "groq"
+        if engine == "groq", GroqSpeech.shared.isAvailable {
+            if let buffers = await GroqSpeech.shared.synthesize(text), !buffers.isEmpty {
+                return buffers
             }
-            trace("Kokoro balsas nepavyko – šįkart naudoju Apple balsą")
-        } else if Self.usesKokoro && !loggedBackgroundFallback {
-            loggedBackgroundFallback = true
-            trace("Kokoro fone neveikia (iOS draudžia GPU) – kalba Apple balsas")
+            trace("Orpheus balsas nepavyko – šįkart kalba Apple balsas")
         }
-        return await renderWithApple(text)
+        return await renderWithApple(GroqSpeech.stripTags(text))
     }
 
     private func renderWithApple(_ text: String) async -> [AVAudioPCMBuffer] {
@@ -140,7 +113,8 @@ final class DJVoice: NSObject, ObservableObject {
     }
 
     /// Pasako tekstą ir grįžta, kai baigia (arba po saugos laiko).
-    func speak(_ text: String) async {
+    func speak(_ rawText: String) async {
+        let text = GroqSpeech.stripTags(rawText)
         if let previous = currentUtterance {
             finish(previous)
             synthesizer.stopSpeaking(at: .immediate)
