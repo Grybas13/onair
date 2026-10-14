@@ -34,6 +34,8 @@ targets:
       - path: OnAir
     dependencies:
       - package: KokoroSwift
+        # KokoroSwift yra dinaminė biblioteka – ją būtina įdėti į programėlę.
+        embed: true
       - package: MLXSwift
         product: MLX
       - package: MLXUtilsLibrary
