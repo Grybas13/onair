@@ -8,6 +8,11 @@ final class DJVoice: NSObject, ObservableObject {
     @Published private(set) var isSpeaking = false
 
     private let synthesizer = AVSpeechSynthesizer()
+    /// Atskiras sintezatorius, kuris balso negroja, o tik paverčia jį garso buferiais.
+    /// Taip Apple balso variklis neliečia programėlės garso sesijos (ir neužmigdo jos fone).
+    private let renderer = AVSpeechSynthesizer()
+    private var renderUtterance: AVSpeechUtterance?
+    private var renderCollector: SpeechBufferCollector?
     private var continuation: CheckedContinuation<Void, Never>?
     private var currentUtterance: AVSpeechUtterance?
 
@@ -15,6 +20,71 @@ final class DJVoice: NSObject, ObservableObject {
         super.init()
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
+        renderer.delegate = self
+        renderer.usesApplicationAudioSession = true
+    }
+
+    private func makeUtterance(_ text: String) -> AVSpeechUtterance {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = Self.selectedVoice()
+        let rate = UserDefaults.standard.double(forKey: SettingsKeys.speechRate)
+        utterance.rate = Float(rate > 0 ? rate : Double(AVSpeechUtteranceDefaultSpeechRate))
+        utterance.pitchMultiplier = 1.0
+        utterance.preUtteranceDelay = 0.05
+        utterance.postUtteranceDelay = 0.15
+        return utterance
+    }
+
+    /// Paverčia tekstą garso buferiais (standartinis float formatas), negrodamas jo.
+    /// Grąžina tuščią masyvą, jei nepavyko – tada kviečiantis gali naudoti speak().
+    func render(_ text: String) async -> [AVAudioPCMBuffer] {
+        let utterance = makeUtterance(text)
+        let collector = SpeechBufferCollector()
+        let words = Double(text.split(separator: " ").count)
+        let timeout = words / 3.0 + 6
+
+        renderUtterance = utterance
+        renderCollector = collector
+        let buffers = await withCheckedContinuation { (continuation: CheckedContinuation<[AVAudioPCMBuffer], Never>) in
+            collector.set(continuation)
+            renderer.write(utterance) { buffer in
+                guard let pcm = buffer as? AVAudioPCMBuffer else { return }
+                if pcm.frameLength == 0 {
+                    collector.finish()
+                } else if let converted = Self.toStandardFloat(pcm) {
+                    collector.append(converted)
+                }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(timeout))
+                collector.finish()
+            }
+        }
+        if renderUtterance === utterance {
+            renderUtterance = nil
+            renderCollector = nil
+        }
+        if buffers.isEmpty {
+            trace("DJ balsas: nepavyko paruošti garso buferių")
+        }
+        return buffers
+    }
+
+    nonisolated private static func toStandardFloat(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let outFormat = AVAudioFormat(
+            standardFormatWithSampleRate: input.format.sampleRate,
+            channels: input.format.channelCount
+        ),
+        let converter = AVAudioConverter(from: input.format, to: outFormat),
+        let output = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: input.frameLength) else {
+            return nil
+        }
+        do {
+            try converter.convert(to: output, from: input)
+        } catch {
+            return nil
+        }
+        return output.frameLength > 0 ? output : nil
     }
 
     /// Pasako tekstą ir grįžta, kai baigia (arba po saugos laiko).
@@ -24,13 +94,7 @@ final class DJVoice: NSObject, ObservableObject {
             synthesizer.stopSpeaking(at: .immediate)
         }
 
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = Self.selectedVoice()
-        let rate = UserDefaults.standard.double(forKey: SettingsKeys.speechRate)
-        utterance.rate = Float(rate > 0 ? rate : Double(AVSpeechUtteranceDefaultSpeechRate))
-        utterance.pitchMultiplier = 1.0
-        utterance.preUtteranceDelay = 0.05
-        utterance.postUtteranceDelay = 0.15
+        let utterance = makeUtterance(text)
 
         currentUtterance = utterance
         isSpeaking = true
@@ -120,6 +184,13 @@ final class DJVoice: NSObject, ObservableObject {
 extension DJVoice: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            if utterance === self.renderUtterance {
+                // Leidžiame paskutiniams buferiams atkeliauti.
+                let collector = self.renderCollector
+                try? await Task.sleep(for: .milliseconds(150))
+                collector?.finish()
+                return
+            }
             self.finish(utterance)
             if self.currentUtterance == nil { self.isSpeaking = false }
         }
@@ -130,5 +201,35 @@ extension DJVoice: AVSpeechSynthesizerDelegate {
             self.finish(utterance)
             if self.currentUtterance == nil { self.isSpeaking = false }
         }
+    }
+}
+
+/// Surenka sintezatoriaus buferius iš bet kurios gijos ir grąžina juos vieną kartą.
+final class SpeechBufferCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffers: [AVAudioPCMBuffer] = []
+    private var continuation: CheckedContinuation<[AVAudioPCMBuffer], Never>?
+
+    func set(_ continuation: CheckedContinuation<[AVAudioPCMBuffer], Never>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        if continuation != nil {
+            buffers.append(buffer)
+        }
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        let pending = continuation
+        let result = buffers
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: result)
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AVFoundation
 
 /// Stoties „smegenys“: parenka dainas, paleidžia jas Spotify, seka dainų kaitą
 /// ir kas N dainų įjungia DJ.
@@ -42,6 +43,7 @@ final class StationEngine: ObservableObject {
     private var isTalking = false
     private var wakeCancelled = false
     private var stationPlaylistID: String?
+    private var lastHeartbeat = Date.distantPast
     /// Spotify programėlė nemato dainų, pridėtų į jau grojamą grojaraštį,
     /// todėl iš karto sudarome ilgą (~6 val.) grojaraštį.
     private let initialPlanSize = 100
@@ -383,21 +385,42 @@ final class StationEngine: ObservableObject {
         onMicText = text
         trace("DJ [\(label)]: \(text)")
 
+        // Papildomas laikas fone, kol perjungiame garso nustatymus ir kalbame.
+        let backgroundTask = BackgroundTaskHolder()
+        backgroundTask.id = UIApplication.shared.beginBackgroundTask(withName: "OnAir DJ") {
+            trace("DJ: baigėsi iOS skirtas fono laikas")
+            backgroundTask.end()
+        }
+        defer { backgroundTask.end() }
+
+        // Balsą paruošiame iš anksto ir grojame per savo garso variklį,
+        // kad Apple balso variklis nekeistų garso sesijos.
+        let buffers = await voice.render(text)
+
         let mode = UserDefaults.standard.string(forKey: SettingsKeys.talkMode) ?? "duck"
         if mode == "pause" && phase == .onAir {
             do { try await api.pause(deviceID: deviceID) } catch { trace("DJ: pauzė nepavyko") }
-            await voice.speak(text)
+            await speak(text, buffers: buffers)
             do { try await api.resume(deviceID: deviceID) } catch { trace("DJ: tęsti nepavyko") }
         } else {
             audio.beginDuck()
             try? await Task.sleep(for: .milliseconds(350))
-            await voice.speak(text)
+            await speak(text, buffers: buffers)
             try? await Task.sleep(for: .milliseconds(250))
             audio.endDuck()
         }
+        audio.ensureKeepAliveHealthy()
 
         onMicText = nil
         isTalking = false
+    }
+
+    private func speak(_ text: String, buffers: [AVAudioPCMBuffer]) async {
+        if buffers.isEmpty {
+            await voice.speak(text)
+        } else {
+            await audio.playSpeech(buffers)
+        }
     }
 
     // MARK: - Dainų parinkimas (1 etapas: tavo „Top“ dainos)
@@ -498,6 +521,12 @@ final class StationEngine: ObservableObject {
     /// Viena būsenos užklausa. Grąžina, po kiek sekundžių tikrinti vėl:
     /// dainos viduryje retai (kas 15 s), artėjant pabaigai – tiksliai po jos.
     private func pollOnce() async -> Double {
+        audio.ensureKeepAliveHealthy()
+        if Date().timeIntervalSince(lastHeartbeat) > 120 {
+            lastHeartbeat = Date()
+            let state = UIApplication.shared.applicationState == .background ? "fone" : "ekrane"
+            trace("Gyvas (\(state)) · garso variklis: \(audio.isEngineRunning ? "veikia" : "SUSTOJĘS")")
+        }
         do {
             guard let state = try await api.playbackState(), let item = state.item else {
                 isPlaying = false
@@ -607,5 +636,17 @@ final class StationEngine: ObservableObject {
         } catch {
             trace("Naujo sąrašo paleisti nepavyko: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Laiko iOS fono užduoties ID, kad ją būtų galima užbaigti ir iš jos pačios pabaigos bloko.
+final class BackgroundTaskHolder {
+    var id: UIBackgroundTaskIdentifier = .invalid
+
+    @MainActor
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }

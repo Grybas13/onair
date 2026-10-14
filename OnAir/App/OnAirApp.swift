@@ -4,6 +4,7 @@ import SwiftUI
 struct OnAirApp: App {
     @StateObject private var auth: SpotifyAuth
     @StateObject private var engine: StationEngine
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         SettingsKeys.registerDefaults()
@@ -24,6 +25,14 @@ struct OnAirApp: App {
                 .environmentObject(engine)
                 .environmentObject(AppLog.shared)
                 .preferredColorScheme(.dark)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .active: trace("Programėlė: ekrane")
+            case .inactive: trace("Programėlė: neaktyvi")
+            case .background: trace("Programėlė: fone")
+            @unknown default: break
+            }
         }
     }
 }

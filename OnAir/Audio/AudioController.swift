@@ -9,6 +9,9 @@ import AVFoundation
 final class AudioController {
     private let engine = AVAudioEngine()
     private let silenceNode = AVAudioPlayerNode()
+    /// DJ balsas groja per tą patį variklį, kad garso sesija visada priklausytų tik mums.
+    private let speechNode = AVAudioPlayerNode()
+    private var speechFormat: AVAudioFormat?
     private var silenceBuffer: AVAudioPCMBuffer?
     private var observers: [NSObjectProtocol] = []
 
@@ -19,6 +22,7 @@ final class AudioController {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
         engine.attach(silenceNode)
         engine.connect(silenceNode, to: engine.mainMixerNode, format: format)
+        engine.attach(speechNode)
 
         let frames: AVAudioFrameCount = 44_100
         if let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) {
@@ -59,6 +63,60 @@ final class AudioController {
             trace("Audio: setActive(false) klaida: \(error.localizedDescription)")
         }
         trace("Audio: fono palaikymas išjungtas")
+    }
+
+    var isEngineRunning: Bool { engine.isRunning }
+
+    /// Jei fono palaikymas turėtų veikti, bet variklis sustojęs – paleidžia iš naujo.
+    func ensureKeepAliveHealthy() {
+        guard isKeepAliveRunning, !engine.isRunning || !silenceNode.isPlaying else { return }
+        trace("Audio: fono palaikymas buvo sustojęs – atkuriu")
+        restartAfterProblem()
+    }
+
+    // MARK: - DJ balsas
+
+    /// Sugroja paruoštus DJ balso garso buferius ir grįžta, kai jie baigiasi.
+    func playSpeech(_ buffers: [AVAudioPCMBuffer]) async {
+        guard let first = buffers.first else { return }
+        do {
+            if !engine.isRunning {
+                try AVAudioSession.sharedInstance().setActive(true)
+                engine.prepare()
+                try engine.start()
+            }
+        } catch {
+            trace("Audio: nepavyko paleisti variklio balsui: \(error.localizedDescription)")
+            return
+        }
+
+        if speechFormat == nil || speechFormat != first.format {
+            engine.disconnectNodeOutput(speechNode)
+            engine.connect(speechNode, to: engine.mainMixerNode, format: first.format)
+            speechFormat = first.format
+        }
+
+        let totalSeconds = buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }
+        let gate = ResumeGate()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            gate.set(continuation)
+            for (index, buffer) in buffers.enumerated() {
+                if index == buffers.count - 1 {
+                    speechNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in
+                        gate.resume()
+                    }
+                } else {
+                    speechNode.scheduleBuffer(buffer, completionHandler: nil)
+                }
+            }
+            speechNode.play()
+            // Saugiklis, jei iOS neiškviestų pabaigos (pvz. pasikeitus ausinėms).
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(totalSeconds + 3))
+                gate.resume()
+            }
+        }
+        speechNode.stop()
     }
 
     // MARK: - Patylinimas
@@ -202,5 +260,25 @@ final class AudioController {
         } catch {
             trace("Audio: nepavyko atkurti: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Užtikrina, kad tęsinys būtų pratęstas lygiai vieną kartą (iš bet kurios gijos).
+final class ResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func set(_ continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func resume() {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume()
     }
 }
