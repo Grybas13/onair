@@ -66,6 +66,21 @@ jobs:
           zip -qry OnAir.ipa Payload
           ls -lh OnAir.ipa
 
+      - name: Verify app bundle
+        run: |
+          APP=Payload/OnAir.app
+          PB=/usr/libexec/PlistBuddy
+          echo "Bundle ID:      $($PB -c 'Print :CFBundleIdentifier' $APP/Info.plist)"
+          echo "Min iOS:        $($PB -c 'Print :MinimumOSVersion' $APP/Info.plist)"
+          echo "Background:     $($PB -c 'Print :UIBackgroundModes:0' $APP/Info.plist)"
+          echo "Xcode:          $($PB -c 'Print :DTXcode' $APP/Info.plist)"
+          lipo -info $APP/OnAir
+          LEN=$($PB -c 'Print :SpotifyClientID' $APP/Info.plist | tr -d '\n' | wc -c | tr -d ' ')
+          echo "Client ID length: $LEN"
+          if [ "$LEN" -lt 10 ]; then
+            echo "::warning::Spotify Client ID is missing from this build. Add the SPOTIFY_CLIENT_ID secret and re-run."
+          fi
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
