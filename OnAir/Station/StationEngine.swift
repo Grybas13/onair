@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Stoties „smegenys“: parenka dainas, paleidžia jas Spotify, seka dainų kaitą
 /// ir kas N dainų įjungia DJ.
@@ -7,6 +8,8 @@ final class StationEngine: ObservableObject {
     enum Phase: Equatable {
         case idle
         case starting
+        /// Spotify programėlė miegojo – atidarėme ją ir laukiame, kol pradės groti.
+        case wakingSpotify
         case onAir
         case needsSpotify
         case failed(String)
@@ -37,6 +40,7 @@ final class StationEngine: ObservableObject {
     private var tracksSinceTalk = 0
     private var recentForRecap: [SpotifyTrack] = []
     private var isTalking = false
+    private var wakeCancelled = false
     private let initialPlanSize = 12
     private let refillSize = 6
 
@@ -52,67 +56,184 @@ final class StationEngine: ObservableObject {
 
     // MARK: - Valdymas
 
+    /// Paleidimo eiga:
+    /// 1. Sudaromas dainų sąrašas.
+    /// 2. Jei Spotify šiame telefone jau groja (vadinasi, nemiega) – siunčiame sąrašą tiesiai.
+    /// 3. Kitaip Spotify programėlė greičiausiai užmigdyta: komanda per serverį „praeitų“,
+    ///    bet muzika nepasileistų. Todėl pirmiausia atidarome Spotify ir tik tada siunčiame.
+    /// 4. DJ prabyla tik įsitikinus, kad pirma daina tikrai groja.
     func start() async {
-        guard phase != .starting else { return }
+        guard phase != .starting, phase != .wakingSpotify else { return }
         stopMonitor()
         phase = .starting
+        wakeCancelled = false
         trace("Stotis: paleidžiama")
 
         do {
-            guard let device = try await findDevice() else {
-                phase = .needsSpotify
-                trace("Stotis: nerastas Spotify įrenginys. Reikia atidaryti Spotify programėlę.")
-                return
-            }
-            deviceID = device.id
-            deviceName = device.name
-            trace("Stotis: groju per „\(device.name)“ (\(device.type))")
-
             try await loadPool()
-            guard !pool.isEmpty else {
-                phase = .failed("Spotify negrąžino tavo „Top“ dainų. Paklausyk muzikos keletą dienų ir bandyk vėl.")
-                return
-            }
-
-            usedURIs.removeAll()
-            plan = []
-            plan = takeNext(count: initialPlanSize)
-            currentIndex = 0
-
-            // Kad Spotify grotų lygiai mūsų tvarka.
-            do { try await api.setShuffle(false, deviceID: deviceID) } catch { trace("Shuffle išjungti nepavyko (nekritiška)") }
-            do { try await api.setRepeat("off", deviceID: deviceID) } catch { trace("Repeat išjungti nepavyko (nekritiška)") }
-
-            audio.startKeepAlive()
-
-            try await api.play(uris: plan.map(\.uri), deviceID: deviceID)
-            trace("Stotis: paleista \(plan.count) dainų")
-
-            await waitForFirstTrack()
-
-            tracksSinceTalk = 0
-            tracksUntilTalk = talkEvery
-            recentForRecap = []
-            phase = .onAir
-
-            if let first = plan.first {
-                let opening = DJScript.stationOpen(first: first)
-                Task { await self.talk(opening, label: "Atidarymas") }
-            }
-            startMonitor(initialDelay: 2)
         } catch {
-            trace("Stotis: nepavyko paleisti – \(error.localizedDescription)")
-            audio.stopKeepAlive()
-            if let apiError = error as? SpotifyAPIError, apiError.status == 404 {
-                // Dažniausiai: Spotify programėlė užmigdyta ir įrenginys „nerastas“.
-                phase = .needsSpotify
+            trace("Stotis: nepavyko gauti dainų – \(error.localizedDescription)")
+            phase = .failed(error.localizedDescription)
+            return
+        }
+        guard !pool.isEmpty else {
+            phase = .failed("Spotify negrąžino tavo „Top“ dainų. Paklausyk muzikos keletą dienų ir bandyk vėl.")
+            return
+        }
+
+        usedURIs.removeAll()
+        plan = []
+        plan = takeNext(count: initialPlanSize)
+        currentIndex = 0
+        guard let firstURI = plan.first?.uri else {
+            phase = .failed("Nepavyko sudaryti dainų sąrašo.")
+            return
+        }
+
+        // Fono palaikymas reikalingas jau dabar: kol Spotify bus atidarytas priekyje,
+        // OnAir turi likti gyva fone ir užbaigti paleidimą.
+        audio.startKeepAlive()
+
+        let uris = plan.map(\.uri)
+        let playStation: () async throws -> Void = {
+            await self.prepareSpotifyOrder()
+            try await self.api.play(uris: uris, deviceID: self.deviceID)
+        }
+        let firstTrackPlays: (SpotifyPlaybackState) -> Bool = { state in
+            state.isPlaying && state.item?.uri == firstURI
+        }
+
+        // Ar Spotify šiame telefone jau groja?
+        var started = false
+        if let state = try? await api.playbackState(),
+           state.isPlaying,
+           let device = state.device, device.type == "Smartphone", let id = device.id {
+            deviceID = id
+            deviceName = device.name
+            trace("Spotify jau groja telefone – siunčiu sąrašą tiesiai")
+            do {
+                try await playStation()
+                started = await waitForPlayback(matching: firstTrackPlays) != nil
+            } catch {
+                trace("Tiesioginis paleidimas nepavyko: \(error.localizedDescription)")
+            }
+        } else {
+            trace("Spotify šiame telefone negroja – greičiausiai miega")
+        }
+
+        if !started {
+            phase = .wakingSpotify
+            started = await wakeSpotifyAndRetry("paleidimas", action: playStation, verify: firstTrackPlays)
+        }
+
+        guard started else {
+            if wakeCancelled {
+                trace("Paleidimas atšauktas")
+                phase = .idle
             } else {
-                phase = .failed(error.localizedDescription)
+                trace("Stotis: Spotify nepradėjo groti")
+                phase = .needsSpotify
+            }
+            audio.stopKeepAlive()
+            return
+        }
+
+        goOnAir()
+    }
+
+    /// Atšaukia Spotify žadinimą (mygtukas ekrane).
+    func cancelWake() {
+        wakeCancelled = true
+    }
+
+    private func goOnAir() {
+        tracksSinceTalk = 0
+        tracksUntilTalk = talkEvery
+        recentForRecap = []
+        phase = .onAir
+        trace("Stotis: eteryje, groja per „\(deviceName ?? "?")“")
+
+        if let first = plan.first {
+            let opening = DJScript.stationOpen(first: first)
+            Task { await self.talk(opening, label: "Atidarymas") }
+        }
+        startMonitor(initialDelay: 2)
+    }
+
+    /// Kad Spotify grotų lygiai mūsų tvarka.
+    private func prepareSpotifyOrder() async {
+        do { try await api.setShuffle(false, deviceID: deviceID) } catch { trace("Shuffle išjungti nepavyko (nekritiška)") }
+        do { try await api.setRepeat("off", deviceID: deviceID) } catch { trace("Repeat išjungti nepavyko (nekritiška)") }
+    }
+
+    // MARK: - Spotify žadinimas
+
+    /// Atidaro Spotify programėlę (ji „pabunda“) ir kartoja veiksmą, kol jis tikrai suveikia.
+    /// OnAir tuo metu veikia fone. Grąžina true, jei pavyko.
+    private func wakeSpotifyAndRetry(
+        _ label: String,
+        action: () async throws -> Void,
+        verify: (SpotifyPlaybackState) -> Bool
+    ) async -> Bool {
+        guard let url = URL(string: "spotify:") else { return false }
+        trace("Atidarau Spotify, kad pabustų (\(label))")
+        let opened = await UIApplication.shared.open(url)
+        guard opened else {
+            trace("Nepavyko atidaryti Spotify programėlės")
+            return false
+        }
+
+        for attempt in 1...6 {
+            try? await Task.sleep(for: .seconds(attempt == 1 ? 2.5 : 2.0))
+            if wakeCancelled { return false }
+
+            if let device = try? await findDevice(phoneOnly: true) {
+                deviceID = device.id
+                deviceName = device.name
+            } else {
+                trace("Bandymas \(attempt): telefono dar nematyti tarp įrenginių")
+                continue
+            }
+
+            do {
+                try await action()
+            } catch {
+                trace("Bandymas \(attempt): \(error.localizedDescription)")
+                continue
+            }
+
+            if await waitForPlayback(matching: verify) != nil {
+                trace("Spotify pabudo ir groja (bandymas \(attempt))")
+                return true
+            }
+            trace("Bandymas \(attempt): komanda priimta, bet muzika dar negroja")
+        }
+        return false
+    }
+
+    /// Kelias sekundes tikrina grotuvo būseną, kol ji atitinka sąlygą.
+    private func waitForPlayback(matching verify: (SpotifyPlaybackState) -> Bool) async -> SpotifyPlaybackState? {
+        for _ in 0..<7 {
+            try? await Task.sleep(for: .milliseconds(700))
+            if wakeCancelled { return nil }
+            guard let state = try? await api.playbackState() else { continue }
+            if verify(state) {
+                if let item = state.item {
+                    lastSeenURI = item.uri
+                    lastSeenTrack = item
+                    nowPlaying = item
+                }
+                isPlaying = state.isPlaying
+                progressMs = state.progressMs ?? 0
+                progressUpdatedAt = Date()
+                return state
             }
         }
+        return nil
     }
 
     func stop(pauseSpotify: Bool) async {
+        wakeCancelled = true
         stopMonitor()
         voice.stop()
         audio.endDuck()
@@ -137,18 +258,37 @@ final class StationEngine: ObservableObject {
     }
 
     func togglePlayPause() async {
-        do {
-            if isPlaying {
+        if isPlaying {
+            do {
                 try await api.pause(deviceID: deviceID)
                 isPlaying = false
-            } else {
-                try await api.resume(deviceID: deviceID)
-                isPlaying = true
+            } catch {
+                trace("Pauzės klaida: \(error.localizedDescription)")
             }
             startMonitor(initialDelay: 1)
-        } catch {
-            trace("Grojimo/pauzės klaida: \(error.localizedDescription)")
+            return
         }
+
+        // Tęsti: jei Spotify per pauzę užmigo, komanda nesuveiks – tada pažadiname.
+        var resumed = false
+        wakeCancelled = false
+        do {
+            try await api.resume(deviceID: deviceID)
+            resumed = await waitForPlayback(matching: { $0.isPlaying }) != nil
+        } catch {
+            trace("Tęsti nepavyko: \(error.localizedDescription)")
+        }
+        if !resumed {
+            resumed = await wakeSpotifyAndRetry(
+                "tęsimas",
+                action: { try await self.api.resume(deviceID: self.deviceID) },
+                verify: { $0.isPlaying }
+            )
+        }
+        if !resumed {
+            trace("Spotify nepavyko pažadinti – atidaryk Spotify ir paspausk groti")
+        }
+        startMonitor(initialDelay: 1)
     }
 
     /// Rankinis DJ įsijungimas testavimui.
@@ -256,7 +396,7 @@ final class StationEngine: ObservableObject {
 
     // MARK: - Įrenginys
 
-    private func findDevice() async throws -> SpotifyDevice? {
+    private func findDevice(phoneOnly: Bool = false) async throws -> SpotifyDevice? {
         let devices = try await api.devices()
         if devices.isEmpty {
             trace("Įrenginių sąrašas tuščias")
@@ -265,29 +405,10 @@ final class StationEngine: ObservableObject {
             trace("Įrenginiai: " + summary.joined(separator: "; "))
         }
         let usable = devices.filter { $0.id != nil && $0.isRestricted != true }
-        return usable.first { $0.type == "Smartphone" && $0.isActive }
+        let phone = usable.first { $0.type == "Smartphone" && $0.isActive }
             ?? usable.first { $0.type == "Smartphone" }
-            ?? usable.first { $0.isActive }
-    }
-
-    private func waitForFirstTrack() async {
-        guard let firstURI = plan.first?.uri else { return }
-        for _ in 0..<8 {
-            try? await Task.sleep(for: .milliseconds(700))
-            if let state = try? await api.playbackState(), let item = state.item, item.uri == firstURI {
-                lastSeenURI = item.uri
-                lastSeenTrack = item
-                nowPlaying = item
-                isPlaying = state.isPlaying
-                progressMs = state.progressMs ?? 0
-                progressUpdatedAt = Date()
-                trace("Pirma daina groja: \(item.name)")
-                return
-            }
-        }
-        trace("Pirmos dainos patvirtinimo nesulaukta – tęsiu")
-        lastSeenURI = firstURI
-        lastSeenTrack = plan.first
+        if phoneOnly { return phone }
+        return phone ?? usable.first { $0.isActive }
     }
 
     // MARK: - Stebėjimas

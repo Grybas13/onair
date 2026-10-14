@@ -29,11 +29,7 @@ struct StationView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
-            if engine.phase == .needsSpotify {
-                Task { await engine.start() }
-            } else {
-                engine.refreshSoon()
-            }
+            engine.refreshSoon()
         }
     }
 
@@ -83,19 +79,36 @@ struct StationView: View {
             }
             .card()
 
+        case .wakingSpotify:
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Žadinu Spotify…")
+                        .font(.headline)
+                }
+                Text("Spotify programėlė miegojo, todėl ją atidarėme. Kai muzika pradės groti ir DJ prabils, grįžk į OnAir (viršuje kairėje „◀ OnAir“).")
+                    .foregroundStyle(Theme.muted)
+                Button("Atšaukti") {
+                    engine.cancelWake()
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card()
+
         case .needsSpotify:
             VStack(alignment: .leading, spacing: 12) {
-                Text("Reikia Spotify programėlės")
+                Text("Spotify nepradėjo groti")
                     .font(.title3.bold())
-                Text("Atidaryk Spotify, palauk kelias sekundes ir grįžk čia. Stotis pasileis automatiškai.")
+                Text("Atidaryk Spotify, paleisk bet kurią dainą, grįžk čia ir spausk „Bandyti dar kartą“. Daugiau informacijos – skirtuke „Žurnalas“.")
                     .foregroundStyle(Theme.muted)
-                primaryButton("Atidaryti Spotify", systemImage: "arrow.up.forward.app") {
+                primaryButton("Bandyti dar kartą", systemImage: "arrow.clockwise") {
+                    Task { await engine.start() }
+                }
+                Button("Atidaryti Spotify") {
                     if let url = URL(string: "spotify:") {
                         openURL(url)
                     }
-                }
-                Button("Bandyti dar kartą") {
-                    Task { await engine.start() }
                 }
                 .font(.subheadline.weight(.semibold))
             }
