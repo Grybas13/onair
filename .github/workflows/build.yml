@@ -33,6 +33,8 @@ jobs:
       - name: Build (unsigned)
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           if [ -z "$SPOTIFY_CLIENT_ID" ]; then
             echo "::warning::SPOTIFY_CLIENT_ID secret is not set - app will build, but login will not work."
@@ -49,6 +51,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             SPOTIFY_CLIENT_ID="$SPOTIFY_CLIENT_ID" \
+            LASTFM_API_KEY="$LASTFM_API_KEY" \
+            GROQ_API_KEY="$GROQ_API_KEY" \
             build 2>&1 | tee build.log
 
       - name: Report compiler errors and warnings
@@ -75,11 +79,13 @@ jobs:
           echo "Background:     $($PB -c 'Print :UIBackgroundModes:0' $APP/Info.plist)"
           echo "Xcode:          $($PB -c 'Print :DTXcode' $APP/Info.plist)"
           lipo -info $APP/OnAir
-          LEN=$($PB -c 'Print :SpotifyClientID' $APP/Info.plist | tr -d '\n' | wc -c | tr -d ' ')
-          echo "Client ID length: $LEN"
-          if [ "$LEN" -lt 10 ]; then
-            echo "::warning::Spotify Client ID is missing from this build. Add the SPOTIFY_CLIENT_ID secret and re-run."
-          fi
+          for KEY in SpotifyClientID LastFMAPIKey GroqAPIKey; do
+            LEN=$($PB -c "Print :$KEY" $APP/Info.plist | tr -d '\n' | wc -c | tr -d ' ')
+            echo "$KEY length: $LEN"
+            if [ "$LEN" -lt 10 ]; then
+              echo "::warning::$KEY is missing from this build. Add the matching GitHub secret and re-run."
+            fi
+          done
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

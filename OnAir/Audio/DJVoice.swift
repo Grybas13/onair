@@ -35,9 +35,22 @@ final class DJVoice: NSObject, ObservableObject {
         return utterance
     }
 
+    private var renderChain: Task<Void, Never>?
+
     /// Paverčia tekstą garso buferiais (standartinis float formatas), negrodamas jo.
     /// Grąžina tuščią masyvą, jei nepavyko – tada kviečiantis gali naudoti speak().
+    /// Užklausos vykdomos paeiliui (vienas sintezatorius).
     func render(_ text: String) async -> [AVAudioPCMBuffer] {
+        let previous = renderChain
+        let task = Task { () -> [AVAudioPCMBuffer] in
+            await previous?.value
+            return await self.renderNow(text)
+        }
+        renderChain = Task { _ = await task.value }
+        return await task.value
+    }
+
+    private func renderNow(_ text: String) async -> [AVAudioPCMBuffer] {
         let utterance = makeUtterance(text)
         let collector = SpeechBufferCollector()
         let words = Double(text.split(separator: " ").count)

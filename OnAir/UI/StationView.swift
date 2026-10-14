@@ -15,6 +15,7 @@ struct StationView: View {
                         header
                         statusCard
                         if engine.phase == .onAir {
+                            vibeBar
                             nowPlayingCard
                             onMicCard
                             controls
@@ -61,7 +62,7 @@ struct StationView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Stotis išjungta")
                     .font(.title3.bold())
-                Text("DJ sudarys sąrašą iš tavo dažniausiai klausomų Spotify dainų ir įsijungs kas kelias dainas.")
+                Text("Dėdis sudarys sąrašą iš tavo mėgstamų Spotify dainų, įmes naujų atradimų ir kas kelias dainas pasakys, ką apie tave galvoja.")
                     .foregroundStyle(Theme.muted)
                 primaryButton("Įjungti stotį", systemImage: "play.fill") {
                     Task { await engine.start() }
@@ -86,7 +87,7 @@ struct StationView: View {
                     Text("Žadinu Spotify…")
                         .font(.headline)
                 }
-                Text("Spotify programėlė miegojo, todėl ją atidarėme. Kai muzika pradės groti ir DJ prabils, grįžk į OnAir (viršuje kairėje „◀ OnAir“).")
+                Text("Spotify programėlė miegojo, todėl ją atidarėme. Kai muzika pradės groti ir Dėdis prabils, grįžk į OnAir (viršuje kairėje „◀ OnAir“).")
                     .foregroundStyle(Theme.muted)
                 Button("Atšaukti") {
                     engine.cancelWake()
@@ -137,6 +138,44 @@ struct StationView: View {
         }
     }
 
+    // MARK: - Vibe
+
+    private var vibeBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Vibe.allCases) { vibe in
+                    let isActive = engine.currentVibe == vibe
+                    let isLoading = engine.switchingVibe == vibe
+                    Button {
+                        Task { await engine.switchVibe(vibe) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isLoading {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: vibe.icon)
+                                    .font(.caption)
+                            }
+                            Text(vibe.title)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Capsule().fill(isActive ? Theme.accent : Theme.card))
+                        .overlay(Capsule().stroke(isActive ? Color.clear : Theme.cardStroke, lineWidth: 1))
+                        .foregroundStyle(.white)
+                    }
+                    .disabled(engine.switchingVibe != nil)
+                    .accessibilityLabel("Vibe \(vibe.title)")
+                    .accessibilityAddTraits(isActive ? .isSelected : [])
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
     // MARK: - Dabar groja
 
     private var nowPlayingCard: some View {
@@ -167,6 +206,29 @@ struct StationView: View {
             }
 
             progressBar
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await engine.dislikeCurrent() }
+                } label: {
+                    Label("Nepatinka", systemImage: "hand.thumbsdown.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Theme.card))
+                }
+                Button {
+                    Task { await engine.likeCurrent() }
+                } label: {
+                    Label("Patinka",
+                          systemImage: engine.isCurrentLiked ? "heart.fill" : "heart")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(engine.isCurrentLiked ? Theme.accent.opacity(0.85) : Theme.card))
+                }
+            }
+            .foregroundStyle(.white)
         }
         .frame(maxWidth: .infinity)
         .card()
@@ -210,7 +272,7 @@ struct StationView: View {
                     .foregroundStyle(Theme.accent)
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("DJ eteryje")
+                    Text("Dėdis eteryje")
                         .font(.caption.bold())
                         .foregroundStyle(Theme.accent)
                     Text(text)
@@ -233,7 +295,7 @@ struct StationView: View {
             controlButton("forward.fill", label: "Praleisti") {
                 Task { await engine.skip() }
             }
-            controlButton("mic.fill", label: "DJ dabar") {
+            controlButton("mic.fill", label: "Dėdis") {
                 Task { await engine.talkNow() }
             }
             controlButton("stop.fill", label: "Išjungti") {
@@ -252,7 +314,7 @@ struct StationView: View {
                     .font(.headline)
                 Spacer()
                 if engine.tracksUntilTalk > 0 {
-                    Text("DJ po \(engine.tracksUntilTalk) d.")
+                    Text("Dėdis po \(engine.tracksUntilTalk) d.")
                         .font(.caption)
                         .foregroundStyle(Theme.muted)
                 }
@@ -269,7 +331,7 @@ struct StationView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "mic.fill")
                             .font(.caption)
-                        Text("DJ eteryje")
+                        Text("Dėdis eteryje")
                             .font(.caption.bold())
                         Spacer()
                     }

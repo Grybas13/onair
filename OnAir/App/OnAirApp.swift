@@ -9,10 +9,17 @@ struct OnAirApp: App {
     init() {
         SettingsKeys.registerDefaults()
         let auth = SpotifyAuth()
+        let api = SpotifyAPI(auth: auth)
+        let store = ListeningStore()
+        let curator = MusicCurator(lastFM: LastFMAPI(), spotify: api, store: store)
+        let writer = DedisWriter(groq: GroqClient(), store: store, curator: curator)
         let engine = StationEngine(
-            api: SpotifyAPI(auth: auth),
+            api: api,
             audio: AudioController(),
-            voice: DJVoice()
+            voice: DJVoice(),
+            store: store,
+            curator: curator,
+            writer: writer
         )
         _auth = StateObject(wrappedValue: auth)
         _engine = StateObject(wrappedValue: engine)

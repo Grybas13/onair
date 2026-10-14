@@ -28,6 +28,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SpotifyClientID: $(SPOTIFY_CLIENT_ID)
+        LastFMAPIKey: $(LASTFM_API_KEY)
+        GroqAPIKey: $(GROQ_API_KEY)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -48,3 +50,5 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_PREVIEWS: YES
         SPOTIFY_CLIENT_ID: ""
+        LASTFM_API_KEY: ""
+        GROQ_API_KEY: ""

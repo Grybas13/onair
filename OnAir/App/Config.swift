@@ -9,6 +9,18 @@ enum Config {
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }()
 
+    /// Last.fm API raktas (GitHub secret LASTFM_API_KEY) – vibe žymoms ir naujoms dainoms.
+    static let lastFMAPIKey: String = plistValue("LastFMAPIKey")
+
+    /// Groq API raktas (GitHub secret GROQ_API_KEY) – Dėdžio tekstams.
+    static let groqAPIKey: String = plistValue("GroqAPIKey")
+
+    private static func plistValue(_ key: String) -> String {
+        let value = (Bundle.main.object(forInfoDictionaryKey: key) as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.contains("$(") ? "" : value
+    }
+
     /// Turi lygiai sutapti su „Redirect URI“, įrašytu Spotify Dashboard nustatymuose.
     static let redirectURI = "onairfm://callback"
     static let callbackScheme = "onairfm"
@@ -17,6 +29,7 @@ enum Config {
         "user-top-read",
         "user-read-recently-played",
         "user-library-read",
+        "user-library-modify",
         "user-follow-read",
         "playlist-read-private",
         "playlist-modify-private",

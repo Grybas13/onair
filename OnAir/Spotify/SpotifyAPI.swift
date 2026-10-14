@@ -61,6 +61,25 @@ final class SpotifyAPI {
         return page?.items ?? []
     }
 
+    /// Randa dainą Spotify kataloge pagal pavadinimą ir atlikėją.
+    func searchTrack(title: String, artist: String) async throws -> SpotifyTrack? {
+        let query = "track:\(title) artist:\(artist)"
+        let response: SpotifySearchResponse? = try await get(
+            "search",
+            query: ["q": query, "type": "track", "limit": "5"]
+        )
+        let items = response?.tracks?.items ?? []
+        let wantedArtist = artist.lowercased()
+        let wantedTitle = DJScript.cleanTitle(title).lowercased()
+        return items.first { track in
+            track.spotifyID != nil
+                && track.artists.contains { $0.name.lowercased() == wantedArtist }
+                && DJScript.cleanTitle(track.name).lowercased() == wantedTitle
+        } ?? items.first { track in
+            track.spotifyID != nil && track.artists.contains { $0.name.lowercased() == wantedArtist }
+        }
+    }
+
     // MARK: - Grotuvas
 
     func devices() async throws -> [SpotifyDevice] {
@@ -125,6 +144,13 @@ final class SpotifyAPI {
         var query: [String: String] = ["state": mode]
         if let deviceID { query["device_id"] = deviceID }
         try await send("PUT", "me/player/repeat", query: query)
+    }
+
+    // MARK: - Biblioteka
+
+    /// Išsaugo dainas į „Liked Songs“ (reikia leidimo user-library-modify).
+    func saveToLibrary(uris: [String]) async throws {
+        try await send("PUT", "me/library", json: ["uris": uris])
     }
 
     // MARK: - Grojaraščiai

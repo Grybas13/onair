@@ -17,9 +17,9 @@ struct SettingsView: View {
             Form {
                 Section {
                     Stepper(value: $talkEvery, in: 1...6) {
-                        Text("DJ įsijungia po \(talkEveryPhrase)")
+                        Text("Dėdis įsijungia po \(talkEveryPhrase)")
                     }
-                    Picker("Kai DJ kalba", selection: $talkMode) {
+                    Picker("Kai Dėdis kalba", selection: $talkMode) {
                         Text("Patylinti muziką").tag("duck")
                         Text("Sustabdyti muziką").tag("pause")
                     }
@@ -71,8 +71,13 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Paslaugos") {
+                    statusRow("Last.fm (vibe, atradimai)", ok: !Config.lastFMAPIKey.isEmpty)
+                    statusRow("Groq (Dėdžio tekstai)", ok: !Config.groqAPIKey.isEmpty)
+                }
+
                 Section {
-                    Text("OnAir 0.1 · 1 etapas (prototipas)")
+                    Text("OnAir 0.2 · 2 etapas")
                         .foregroundStyle(Theme.muted)
                 }
             }
@@ -80,6 +85,18 @@ struct SettingsView: View {
             .onAppear {
                 voices = DJVoice.englishVoices()
             }
+        }
+    }
+
+    private func statusRow(_ title: String, ok: Bool) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(ok ? Theme.spotifyGreen : .orange)
+            Text(ok ? "Prijungta" : "Nėra rakto")
+                .foregroundStyle(Theme.muted)
+                .font(.footnote)
         }
     }
 

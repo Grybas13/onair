@@ -3,13 +3,13 @@ import Foundation
 // Minimalūs Spotify Web API modeliai. Dekoduojama su .convertFromSnakeCase,
 // todėl pvz. „duration_ms“ tampa „durationMs“.
 
-struct SpotifyImage: Decodable {
+struct SpotifyImage: Codable {
     let url: String
     let width: Int?
     let height: Int?
 }
 
-struct SpotifyArtist: Decodable {
+struct SpotifyArtist: Codable {
     let spotifyID: String?
     let name: String
 
@@ -19,13 +19,13 @@ struct SpotifyArtist: Decodable {
     }
 }
 
-struct SpotifyAlbum: Decodable {
+struct SpotifyAlbum: Codable {
     let name: String
     let images: [SpotifyImage]?
     let releaseDate: String?
 }
 
-struct SpotifyTrack: Decodable, Identifiable, Hashable {
+struct SpotifyTrack: Codable, Identifiable, Hashable {
     let spotifyID: String?
     let uri: String
     let name: String
@@ -46,6 +46,17 @@ struct SpotifyTrack: Decodable, Identifiable, Hashable {
 
     var primaryArtist: String {
         artists.first?.name ?? "Unknown artist"
+    }
+
+    /// Išleidimo metai iš albumo datos (pvz. "2014-05-02" → 2014).
+    var releaseYear: Int? {
+        guard let date = album?.releaseDate, date.count >= 4 else { return nil }
+        return Int(date.prefix(4))
+    }
+
+    /// Raktas palyginimui tarp skirtingų tos pačios dainos versijų.
+    var matchKey: String {
+        DJScript.cleanTitle(name).lowercased() + "|" + primaryArtist.lowercased()
     }
 
     var artworkURL: URL? {
@@ -109,6 +120,13 @@ struct SpotifyPlaylist: Decodable {
 struct SpotifyRecentlyPlayedItem: Decodable {
     let track: SpotifyTrack
     let playedAt: String
+}
+
+struct SpotifySearchResponse: Decodable {
+    struct Tracks: Decodable {
+        let items: [SpotifyTrack]
+    }
+    let tracks: Tracks?
 }
 
 struct SpotifyErrorBody: Decodable {
