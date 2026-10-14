@@ -565,6 +565,7 @@ final class StationEngine: ObservableObject {
         lines.append(await writer.diagnose())
 
         let sample = "[excited] Dėdis here, testing the new voice. If you can hear me, we're in business."
+        GroqSpeech.shared.resetPause()
         let started = Date()
         if let buffers = await GroqSpeech.shared.synthesize(sample), !buffers.isEmpty {
             let seconds = buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }

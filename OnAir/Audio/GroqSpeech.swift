@@ -22,7 +22,7 @@ final class GroqSpeech {
         VoiceOption(id: "diana", title: "Diana · moteris"),
         VoiceOption(id: "hannah", title: "Hannah · moteris")
     ]
-    static let defaultVoice = "troy"
+    nonisolated static let defaultVoice = "troy"
 
     /// Orpheus priima iki ~200 ženklų per užklausą.
     static let maxCharacters = 190
@@ -36,6 +36,11 @@ final class GroqSpeech {
     private let endpoint = URL(string: "https://api.groq.com/openai/v1/audio/speech")!
     private var pausedUntil = Date.distantPast
     private(set) var lastError: String?
+
+    /// Leidžia bandyti iš karto (pvz. paspaudus „Patikrinti Groq“ po sąlygų priėmimo).
+    func resetPause() {
+        pausedUntil = .distantPast
+    }
 
     var isAvailable: Bool {
         !Config.groqAPIKey.isEmpty && Date() >= pausedUntil
