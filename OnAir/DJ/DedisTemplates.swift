@@ -11,6 +11,7 @@ enum DedisTemplates {
         case .open: pool = opens
         case .handoff: pool = handoffs
         case .vibeSwitch(_, let to): pool = vibeSwitches[to] ?? genericVibeSwitch
+        case .switchUp(let direction): pool = switchUps(direction)
         case .dislike(_, let banned): pool = banned ? artistBans : dislikes
         case .like: pool = likes
         case .mention: pool = mentions
@@ -90,6 +91,16 @@ enum DedisTemplates {
             { _ in "Mix mode. A little of what you like, a little of what you need." }
         ]
     ]
+
+    static func switchUps(_ direction: [String]) -> [Line] {
+        let target = direction.first.map { "some \($0)" } ?? "something else"
+        return [
+            { _ in "Not feeling it? Picky little bastard. Fine, switching to \(target)." },
+            { _ in "[dramatic] He's bored. The king is bored. Okay, \(target) coming up." },
+            { _ in "Say no more. Throwing that out the window, here's \(target)." },
+            { _ in "Switching it up. If you skip this too, I'm putting on polka." }
+        ]
+    }
 
     static let genericVibeSwitch: [Line] = [
         { f in "Switching it up. \(f.vibe.title) mode, let's see if you can handle it." }

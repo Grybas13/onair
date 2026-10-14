@@ -80,6 +80,76 @@ final class MusicCurator {
         return separateArtists(plan)
     }
 
+    /// „Nefeelinu šito“: sudaro sąrašą kita kryptimi – dainos, kurių žymos labiausiai skiriasi
+    /// nuo ką tik grojusių, sugrupuotos aplink vieną „naują kryptį“ (kad nebūtų chaoso).
+    /// Grąžina sąrašą ir naujos krypties žymas (DJ komentarui).
+    func buildSwitchUpPlan(recent: [SpotifyTrack], count: Int, avoid: Set<String>) async -> (plan: [SpotifyTrack], direction: [String]) {
+        await waitForTagging(timeout: 8)
+
+        var recentTags: [String: Int] = [:]
+        for track in recent {
+            for (tag, value) in tags(for: track) {
+                recentTags[tag, default: 0] += value
+            }
+        }
+        let recentURIs = Set(recent.map(\.uri))
+        let usable = pool.filter { !store.isBanned($0) && !avoid.contains($0.uri) && !recentURIs.contains($0.uri) }
+        let recentArtists = Set(recent.map { $0.primaryArtist.lowercased() })
+
+        let tagged = usable.filter { !tags(for: $0).isEmpty && !recentArtists.contains($0.primaryArtist.lowercased()) }
+        guard tagged.count >= 8, !recentTags.isEmpty else {
+            trace("Keitimas: per mažai žymų – imu atsitiktinę kryptį")
+            let fallback = Array(freshFirst(usable.filter { !recentArtists.contains($0.primaryArtist.lowercased()) }).prefix(count))
+            return (separateArtists(fallback), [])
+        }
+
+        // 1. Labiausiai besiskiriančios dainos – iš jų atsitiktinai renkamės naujos krypties „sėklą“.
+        let byContrast = tagged
+            .map { (track: $0, similarity: Self.cosine(tags(for: $0), recentTags)) }
+            .sorted { $0.similarity < $1.similarity }
+        let contrastPool = byContrast.prefix(max(6, byContrast.count / 4))
+        guard let seed = contrastPool.randomElement()?.track else { return ([], []) }
+        let seedTags = tags(for: seed)
+
+        // 2. Dainos, panašios į sėklą (nauja, bet nuosekli kryptis).
+        var cluster: [(track: SpotifyTrack, score: Double)] = []
+        for track in usable where track.uri != seed.uri {
+            let toSeed = Self.cosine(tags(for: track), seedTags)
+            let toRecent = Self.cosine(tags(for: track), recentTags)
+            let score = toSeed - 0.6 * toRecent + Double.random(in: 0...0.1)
+            if toSeed > 0.15 { cluster.append((track: track, score: score)) }
+        }
+        cluster.sort { $0.score > $1.score }
+
+        let discoveryCount = hasLastFM ? min(6, count / 4) : 0
+        var own = [seed] + cluster.prefix(count - discoveryCount - 1).map(\.track)
+        if own.count < 8 {
+            own += freshFirst(usable).filter { candidate in !own.contains { $0.uri == candidate.uri } }.prefix(8 - own.count)
+        }
+        var discovered: [SpotifyTrack] = []
+        if discoveryCount > 0 {
+            let seeds = [seed] + cluster.prefix(3).map(\.track)
+            discovered = await discover(seeds: seeds, count: discoveryCount, exclude: Set(pool.map(\.uri)).union(avoid))
+        }
+
+        let direction = topTagNames(for: seed, limit: 3)
+        trace("Keitimas: nauja kryptis \(direction.joined(separator: ", ")) – \(own.count) tavo + \(discovered.count) naujų")
+        return (separateArtists(interleave(own: own, discovered: discovered)), direction)
+    }
+
+    /// Kosinusinis žymų panašumas (0 – visai skirtingos, 1 – vienodos).
+    static func cosine(_ a: [String: Int], _ b: [String: Int]) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        var dot = 0.0
+        for (tag, value) in a {
+            if let other = b[tag] { dot += Double(value) * Double(other) }
+        }
+        let normA = sqrt(a.values.reduce(0.0) { $0 + Double($1 * $1) })
+        let normB = sqrt(b.values.reduce(0.0) { $0 + Double($1 * $1) })
+        guard normA > 0, normB > 0 else { return 0 }
+        return dot / (normA * normB)
+    }
+
     /// Fone paruošia naujų dainų banką kitam eteriui ir „Mix“ režimui.
     func refreshDiscoveryBankInBackground() {
         guard hasLastFM, bankTask == nil, store.data.discoveryBank.count < 40 else { return }

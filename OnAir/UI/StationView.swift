@@ -295,8 +295,8 @@ struct StationView: View {
             controlButton("forward.fill", label: "Praleisti") {
                 Task { await engine.skip() }
             }
-            controlButton("mic.fill", label: "DJ") {
-                Task { await engine.talkNow() }
+            controlButton(engine.isSwitchingUp ? "hourglass" : "arrow.triangle.2.circlepath", label: "Keisti") {
+                Task { await engine.switchItUp() }
             }
             controlButton("stop.fill", label: "Išjungti") {
                 Task { await engine.stop(pauseSpotify: true) }
@@ -377,7 +377,7 @@ struct StationView: View {
         let remainingMs = max(0, current.durationMs - (engine.progressMs + elapsed))
         var start = Date().addingTimeInterval(Double(remainingMs) / 1000)
 
-        let talkEvery = max(1, UserDefaults.standard.integer(forKey: SettingsKeys.talkEvery))
+        let talkEvery = DJStyle.talkEvery
         var entries: [UpcomingEntry] = []
         for (offset, track) in engine.plan[(index + 1)...].prefix(10).enumerated() {
             let position = offset + 1

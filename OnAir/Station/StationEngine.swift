@@ -54,6 +54,8 @@ final class StationEngine: ObservableObject {
 
     /// Iš anksto paruoštas Dėdžio perėjimas (tekstas + balsas), kad prabiltų be pauzės.
     private struct PreparedSegment {
+        /// Daina, kurios pabaigoje DJ prabyla.
+        let fromURI: String
         let nextURI: String
         let nextKey: String
         let text: String
@@ -61,6 +63,9 @@ final class StationEngine: ObservableObject {
     }
     private var prepared: PreparedSegment?
     private var isPreparing = false
+    /// Suplanuotas perėjimas: DJ prabyla likus ~1–2 s iki dainos pabaigos ir kalba ant kitos pradžios.
+    private var segueTask: Task<Void, Never>?
+    private var segueFired = false
 
     /// Spotify programėlė nemato dainų, pridėtų į jau grojamą grojaraštį,
     /// todėl iš karto sudarome ilgą grojaraštį.
@@ -78,7 +83,7 @@ final class StationEngine: ObservableObject {
     }
 
     private var talkEvery: Int {
-        max(1, UserDefaults.standard.integer(forKey: SettingsKeys.talkEvery))
+        DJStyle.talkEvery
     }
 
     private func planSize(for vibe: Vibe) -> Int {
@@ -404,6 +409,7 @@ final class StationEngine: ObservableObject {
 
     func stop(pauseSpotify: Bool) async {
         wakeCancelled = true
+        cancelSegue()
         stopMonitor()
         voice.stop()
         audio.endDuck()
@@ -494,6 +500,7 @@ final class StationEngine: ObservableObject {
         currentVibe = vibe
         // Kol keičiame sąrašą, stebėjimas nereikalingas (kitaip perjungimas atrodytų kaip „praleista“).
         stopMonitor()
+        cancelSegue()
         trace("Vibe: \(previousVibe.title) → \(vibe.title)")
 
         let talkTask = Task { await self.talk(.vibeSwitch(from: previousVibe, to: vibe)) }
@@ -518,6 +525,39 @@ final class StationEngine: ObservableObject {
         startMonitor(initialDelay: 2)
     }
 
+    @Published private(set) var isSwitchingUp = false
+
+    /// „Keisti“: nefeelinu šito – DJ pakomentuoja ir pradeda kitokios krypties dainas.
+    func switchItUp() async {
+        guard phase == .onAir, switchingVibe == nil, !isSwitchingUp else { return }
+        isSwitchingUp = true
+        stopMonitor()
+        cancelSegue()
+        defer {
+            isSwitchingUp = false
+            startMonitor(initialDelay: 2)
+        }
+
+        var recent = Array(recentForRecap.suffix(3))
+        if let current = nowPlaying { recent.append(current) }
+        var avoid = Set(recent.map(\.uri))
+        if let index = currentIndex {
+            avoid.formUnion(plan.prefix(index + 1).map(\.uri))
+        }
+        let result = await curator.buildSwitchUpPlan(recent: recent, count: vibePlanSize, avoid: avoid)
+        guard !result.plan.isEmpty else {
+            trace("Keitimas: nepavyko sudaryti naujo sąrašo")
+            return
+        }
+        await talk(.switchUp(direction: result.direction))
+        recordCurrentAsInterrupted()
+        if await replaceAndPlay(result.plan) {
+            tracksSinceTalk = 0
+            tracksUntilTalk = talkEvery
+            recentForRecap = []
+        }
+    }
+
     /// ❤️ – išsaugo dainą į Spotify „Liked Songs“ ir prisimena, kad patinka.
     func likeCurrent() async {
         guard let track = nowPlaying, !isCurrentLiked else { return }
@@ -529,7 +569,7 @@ final class StationEngine: ObservableObject {
         } catch {
             trace("❤️ išsaugoti į Spotify nepavyko: \(error.localizedDescription)")
         }
-        if Int.random(in: 0..<10) < 4 {
+        if Double.random(in: 0..<1) < DJStyle.likeReactionChance {
             await talk(.like(track: track))
         }
     }
@@ -543,7 +583,9 @@ final class StationEngine: ObservableObject {
         // Kad perėjimas po praleidimo neužsikabintų ant Dėdžio reakcijos.
         tracksSinceTalk = -1
         await skip()
-        await talk(.dislike(track: track, artistBanned: banned))
+        if DJStyle.reactsToDislikes || banned {
+            await talk(.dislike(track: track, artistBanned: banned))
+        }
     }
 
     /// Rankinis Dėdžio įsijungimas.
@@ -689,9 +731,55 @@ final class StationEngine: ObservableObject {
         Task {
             let text = await self.writer.write(.handoff(previous: current, earlier: earlier, next: next, vibe: vibe))
             let buffers = await self.voice.render(text)
-            self.prepared = PreparedSegment(nextURI: next.uri, nextKey: next.matchKey, text: text, buffers: buffers)
+            self.prepared = PreparedSegment(fromURI: current.uri, nextURI: next.uri, nextKey: next.matchKey, text: text, buffers: buffers)
             self.isPreparing = false
+            self.scheduleSegue()
         }
+    }
+
+    /// Suplanuoja, kad paruoštas perėjimas prasidėtų tiksliai dainų sandūroje,
+    /// o ne po to, kai pastebime naują dainą (tai užtrukdavo kelias sekundes).
+    private func scheduleSegue() {
+        guard segueTask == nil, phase == .onAir, isPlaying, switchingVibe == nil,
+              let segment = prepared, let current = nowPlaying, segment.fromURI == current.uri else { return }
+        let elapsed = Date().timeIntervalSince(progressUpdatedAt)
+        let remaining = Double(current.durationMs - progressMs) / 1000 - elapsed
+        let speech = segment.buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }
+        let leadIn = min(2.0, max(0.8, speech * 0.15))
+        let delay = remaining - leadIn
+        guard delay > 0.3 else { return }
+
+        let fromURI = current.uri
+        segueFired = false
+        trace(String(format: "Perėjimas suplanuotas po %.1f s (DJ prabils likus %.1f s dainos)", delay, leadIn))
+        segueTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled else { return }
+            defer { self.segueTask = nil }
+            guard self.phase == .onAir, self.switchingVibe == nil,
+                  let segment = self.prepared, segment.fromURI == fromURI else { return }
+            // Greitas patikrinimas, ar vis dar groja ta pati daina.
+            if let state = try? await self.api.playbackState() {
+                guard state.isPlaying, state.item?.uri == fromURI else {
+                    trace("Perėjimas atšauktas – daina pasikeitė anksčiau")
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            self.segueFired = true
+            self.prepared = nil
+            // Artėjanti dainos kaita padidins skaitiklį iki 0 – antrą kartą DJ nekalbės.
+            self.tracksSinceTalk = -1
+            self.tracksUntilTalk = self.talkEvery
+            self.recentForRecap.removeAll()
+            await self.talk(text: segment.text, label: "Perėjimas", buffers: segment.buffers)
+        }
+    }
+
+    private func cancelSegue() {
+        segueTask?.cancel()
+        segueTask = nil
+        segueFired = false
     }
 
     // MARK: - Įrenginys
@@ -765,11 +853,12 @@ final class StationEngine: ObservableObject {
             let remaining = Double(item.durationMs - (state.progressMs ?? 0)) / 1000
             if remaining < 32 && remaining > 3 {
                 prefetchHandoffIfNeeded()
+                scheduleSegue()
             }
             // Bateriją taupome: dainos viduryje tikriname retai, prie pabaigos – tiksliai.
             if remaining > 32 { return min(25, remaining - 28) }
             if remaining > 17 { return remaining - 15 }
-            return max(0.8, remaining + 0.7)
+            return max(0.6, remaining + 0.4)
         } catch SpotifyAPIError.rateLimited(let seconds) {
             return Double(max(seconds, 5))
         } catch SpotifyAPIError.quotaExceeded {
@@ -800,6 +889,10 @@ final class StationEngine: ObservableObject {
     private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack, progressMs: Int) async {
         trace("Nauja daina: \(current.name) – \(current.artistNames)")
         let now = Date()
+        if segueTask != nil && !segueFired {
+            // Daina pasikeitė anksčiau nei suplanuota (pvz. praleista) – perėjimą pasakysime įprastai.
+            cancelSegue()
+        }
 
         // Įrašome, kiek klausei ankstesnės ir ar ją praleidai.
         if let previous, let startedAt = currentTrackStartedAt {

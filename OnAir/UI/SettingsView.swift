@@ -5,7 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var auth: SpotifyAuth
     @EnvironmentObject private var engine: StationEngine
 
-    @AppStorage(SettingsKeys.talkEvery) private var talkEvery = 3
+    @AppStorage(DJStyle.key) private var chattiness = 3
     @AppStorage(SettingsKeys.voiceID) private var voiceID = ""
     @AppStorage(SettingsKeys.speechRate) private var speechRate = 0.5
     @AppStorage(SettingsKeys.talkMode) private var talkMode = "duck"
@@ -29,8 +29,30 @@ struct SettingsView: View {
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
                     }
-                    Stepper(value: $talkEvery, in: 1...6) {
-                        Text("Kalba po \(talkEveryPhrase)")
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Plepumas")
+                            Spacer()
+                            Text(DJStyle.title(for: chattiness))
+                                .foregroundStyle(Theme.accent)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        HStack(spacing: 10) {
+                            Image(systemName: "speaker.wave.1")
+                            Slider(
+                                value: Binding(
+                                    get: { Double(chattiness) },
+                                    set: { chattiness = Int($0.rounded()) }
+                                ),
+                                in: 1...5,
+                                step: 1
+                            )
+                            Image(systemName: "speaker.wave.3")
+                        }
+                        .foregroundStyle(Theme.muted)
+                        Text(DJStyle.summary(for: chattiness))
+                            .font(.footnote)
+                            .foregroundStyle(Theme.muted)
                     }
                     Picker("Kai DJ kalba", selection: $talkMode) {
                         Text("Patylinti muziką").tag("duck")
@@ -168,7 +190,5 @@ struct SettingsView: View {
         }
     }
 
-    private var talkEveryPhrase: String {
-        talkEvery == 1 ? "kiekvienos dainos" : "\(talkEvery) dainų"
-    }
+
 }

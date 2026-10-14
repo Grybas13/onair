@@ -5,6 +5,7 @@ enum DJMoment {
     case open(first: SpotifyTrack, vibe: Vibe)
     case handoff(previous: SpotifyTrack, earlier: [SpotifyTrack], next: SpotifyTrack, vibe: Vibe)
     case vibeSwitch(from: Vibe, to: Vibe)
+    case switchUp(direction: [String])
     case dislike(track: SpotifyTrack, artistBanned: Bool)
     case like(track: SpotifyTrack)
     case mention(track: SpotifyTrack, vibe: Vibe)
@@ -15,6 +16,7 @@ enum DJMoment {
         case .open: return "Atidarymas"
         case .handoff: return "Perėjimas"
         case .vibeSwitch: return "Vibe"
+        case .switchUp: return "Keitimas"
         case .dislike: return "👎"
         case .like: return "❤️"
         case .mention: return "Rankinis"
@@ -58,7 +60,7 @@ final class DedisWriter {
 
     func write(_ moment: DJMoment) async -> String {
         let facts = buildFacts(moment)
-        if let raw = await groq.complete(system: Self.persona(name: DJIdentity.name), user: prompt(moment, facts: facts)),
+        if let raw = await groq.complete(system: Self.persona(name: DJIdentity.name, maxWords: DJStyle.maxWords), user: prompt(moment, facts: facts)),
            let cleaned = Self.clean(raw) {
             let personal = DJIdentity.personalize(cleaned)
             remember(personal)
@@ -128,6 +130,8 @@ final class DedisWriter {
             facts.earlierArtists = DJScript.uniqueArtists(earlier, excluding: [previous.primaryArtist, next.primaryArtist])
         case .vibeSwitch(_, let to):
             facts.vibe = to
+        case .switchUp:
+            break
         case .dislike(let track, _), .like(let track):
             fillPrevious(track)
         case .mention(let track, let vibe):
@@ -141,7 +145,7 @@ final class DedisWriter {
 
     // MARK: - Užklausa modeliui
 
-    static func persona(name: String) -> String {
+    static func persona(name: String, maxWords: Int) -> String {
         """
         You are \(name), the host of OnAir, a radio station with exactly one listener, \
         a guy in Lithuania. You are like his foul-mouthed, savage, hilarious uncle on the mic. Your name is \(name); never call yourself anything else. You roast his music taste and \
@@ -157,7 +161,7 @@ final class DedisWriter {
         chosen only from: [excited], [cheerful], [dramatic], [whisper], [menacing whisper], [authoritatively]. Use it when it \
         makes the bit funnier (e.g. [whisper] for a secret roast, [dramatic] for fake outrage). Never invent other tags.
 
-        Format: 1 to 3 short sentences, at most 30 words and 180 characters in total. Natural spoken English with contractions. No emojis, hashtags, \
+        Format: 1 to 3 short sentences, at most \(maxWords) words in total. Natural spoken English with contractions. No emojis, hashtags, \
         stage directions, asterisks, quotation marks or lists. Do not start with "Alright", "Well" or "Ladies and gentlemen". \
         Do not greet him unless it is the opening of the show. Vary your openings and don't repeat your recent lines.
         """
@@ -173,6 +177,9 @@ final class DedisWriter {
             lines.append("Moment: a break between songs. React to what just played or to his habits, then throw to the next song.")
         case .vibeSwitch(let from, let to):
             lines.append("Moment: he just pressed a button to switch the station vibe from \(from.title) to \(to.title) (\(to.promptDescription)). React to that switch. The next song is already starting.")
+        case .switchUp(let direction):
+            let where_ = direction.isEmpty ? "something completely different" : "a different direction: \(direction.joined(separator: ", "))"
+            lines.append("Moment: he pressed the 'not feeling it, switch it up' button. Mock him a little for being picky, then announce you're switching to \(where_). The music changes right after you finish.")
         case .dislike(_, let banned):
             if banned {
                 lines.append("Moment: he just gave a thumbs down to a song by \(facts.previousArtist ?? "this artist") for the second time, so that artist is now banned from the station. React in one or two sentences.")
@@ -253,7 +260,7 @@ final class DedisWriter {
         text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if text.count > 260, let cut = text.prefix(260).lastIndex(where: { ".!?".contains($0) }) {
+        if text.count > 340, let cut = text.prefix(340).lastIndex(where: { ".!?".contains($0) }) {
             text = String(text[...cut])
         }
         return text.count >= 3 ? text : nil
