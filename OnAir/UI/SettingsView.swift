@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.talkMode) private var talkMode = "duck"
     @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "kokoro"
     @AppStorage(SettingsKeys.kokoroVoice) private var kokoroVoice = KokoroEngine.defaultVoice
+    @AppStorage(KokoroCrashGuard.crashedStageKey) private var kokoroCrashedStage = ""
     @ObservedObject private var kokoroModel = KokoroModelStore.shared
 
     @State private var voices: [AVSpeechSynthesisVoice] = []
@@ -36,6 +37,12 @@ struct SettingsView: View {
                     Picker("Balso variklis", selection: $voiceEngine) {
                         Text("Kokoro (neuroninis)").tag("kokoro")
                         Text("Apple").tag("apple")
+                    }
+
+                    if !kokoroCrashedStage.isEmpty {
+                        Text("Kokoro anksčiau užlūžo („\(kokoroCrashedStage)“), todėl įjungtas Apple balsas. Atsiųsk žurnalą – pataisysiu.")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
                     }
 
                     if voiceEngine == "kokoro" {
@@ -104,6 +111,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Nustatymai")
+            .onChange(of: voiceEngine) { _, newValue in
+                if newValue == "kokoro" { kokoroCrashedStage = "" }
+            }
             .onAppear {
                 voices = DJVoice.englishVoices()
             }

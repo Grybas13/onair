@@ -69,7 +69,22 @@ jobs:
       - name: Package IPA
         run: |
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/OnAir.app Payload/
+          PRODUCTS=build/Build/Products/Release-iphoneos
+          cp -R $PRODUCTS/OnAir.app Payload/
+          APP=Payload/OnAir.app
+          # SPM bibliotekų resursai (Kokoro konfigūracija, tarimo žodynai, MLX) turi būti programėlėje.
+          for B in $PRODUCTS/*.bundle; do
+            [ -e "$B" ] || continue
+            NAME=$(basename "$B")
+            if [ -z "$(find "$APP" -name "$NAME" -maxdepth 3)" ]; then
+              cp -R "$B" "$APP/"
+              echo "::notice::Added missing resource bundle $NAME"
+            fi
+          done
+          echo "::notice::Bundles in app: $(cd $APP && find . -name '*.bundle' -maxdepth 3 | tr '\n' ' ')"
+          echo "::notice::Frameworks: $(ls $APP/Frameworks | tr '\n' ' ')"
+          echo "::notice::Metallibs: $(cd $APP && find . -name '*.metallib' | tr '\n' ' ')"
+          echo "::notice::Products bundles: $(ls -d $PRODUCTS/*.bundle 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
           zip -qry OnAir.ipa Payload
           ls -lh OnAir.ipa
 

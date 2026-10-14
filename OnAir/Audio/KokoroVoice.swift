@@ -152,6 +152,35 @@ extension KokoroModelStore: URLSessionDownloadDelegate {
     }
 }
 
+/// Jei programėlė užlūžta Kokoro įkėlimo ar kalbėjimo metu, kitą kartą atidarius
+/// automatiškai perjungiamas Apple balsas (kad Dėdis neužlaužtų programėlės vėl ir vėl).
+/// Žymė saugoma faile, nes UserDefaults užlūžus gali nespėti išsisaugoti.
+enum KokoroCrashGuard {
+    private static var markerURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("kokoro-in-progress.txt")
+    }
+
+    static let crashedStageKey = "kokoroCrashedStage"
+
+    static func begin(_ stage: String) {
+        try? stage.data(using: .utf8)?.write(to: markerURL, options: .atomic)
+    }
+
+    static func end() {
+        try? FileManager.default.removeItem(at: markerURL)
+    }
+
+    static func checkAtLaunch() {
+        guard let data = try? Data(contentsOf: markerURL),
+              let stage = String(data: data, encoding: .utf8) else { return }
+        end()
+        UserDefaults.standard.set("apple", forKey: SettingsKeys.voiceEngine)
+        UserDefaults.standard.set(stage, forKey: crashedStageKey)
+        trace("Kokoro: praeitą kartą programėlė užlūžo („\(stage)“) – perjungiau į Apple balsą")
+    }
+}
+
 /// Kokoro TTS variklis. Veikia tik CPU: iOS draudžia naudoti GPU fone (užrakintu ekranu),
 /// o Dėdis turi kalbėti ir tada.
 final class KokoroEngine: @unchecked Sendable {
@@ -199,6 +228,11 @@ final class KokoroEngine: @unchecked Sendable {
 
     static let defaultVoice = "am_michael"
 
+    /// MLX visam laikui nukreipiamas į CPU (GPU fone iOS draudžia).
+    static func configureCPUOnly() {
+        Device.setDefault(device: .cpu)
+    }
+
     private let lock = NSLock()
     private var tts: KokoroTTS?
     private var voices: [String: MLXArray] = [:]
@@ -221,14 +255,20 @@ final class KokoroEngine: @unchecked Sendable {
         guard KokoroModelStore.isModelReady, let voicesURL = KokoroModelStore.voicesFileURL else { return false }
 
         let started = Date()
+        trace("Kokoro: skaitau balsus")
+        KokoroCrashGuard.begin("balsų skaitymas")
         let loadedVoices = NpyzReader.read(fileFromPath: voicesURL) ?? [:]
         guard !loadedVoices.isEmpty else {
+            KokoroCrashGuard.end()
             trace("Kokoro: nepavyko perskaityti balsų failo")
             return false
         }
+        trace("Kokoro: balsų \(loadedVoices.count), įkeliu modelį")
+        KokoroCrashGuard.begin("modelio įkėlimas")
         let engine = Device.withDefaultDevice(.cpu) {
             KokoroTTS(modelPath: KokoroModelStore.modelFileURL, g2p: .misaki)
         }
+        KokoroCrashGuard.end()
         tts = engine
         voices = loadedVoices
         trace(String(format: "Kokoro: modelis įkeltas per %.1f s", Date().timeIntervalSince(started)))
@@ -249,6 +289,8 @@ final class KokoroEngine: @unchecked Sendable {
         let pause = [Float](repeating: 0, count: Int(Self.sampleRate * 0.12))
         for sentence in Self.sentences(Self.prepare(text)) {
             do {
+                KokoroCrashGuard.begin("kalbos generavimas")
+                defer { KokoroCrashGuard.end() }
                 let (audio, _) = try Device.withDefaultDevice(.cpu) {
                     try tts.generateAudio(voice: style, language: language, text: sentence, speed: speed)
                 }

@@ -7,7 +7,11 @@ struct OnAirApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // Pirmiausia žurnalas – kad perimtų ankstesnės sesijos (galbūt užlūžusios) eilutes.
+        _ = AppLog.shared
         SettingsKeys.registerDefaults()
+        KokoroCrashGuard.checkAtLaunch()
+        KokoroEngine.configureCPUOnly()
         let auth = SpotifyAuth()
         let api = SpotifyAPI(auth: auth)
         let store = ListeningStore()
