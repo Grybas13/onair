@@ -272,22 +272,47 @@ final class StationEngine: ObservableObject {
 
     /// Perrašo grojaraštį nauju sąrašu ir paleidžia jį nuo pradžios (vibe keitimas, sąrašo pabaiga).
     private func replaceAndPlay(_ newPlan: [SpotifyTrack]) async -> Bool {
+        let playlist: SpotifyPlaylist
         do {
-            let playlist = try await prepareStationPlaylist(uris: newPlan.map(\.uri))
-            try? await Task.sleep(for: .milliseconds(800))
-            try await api.playContext(playlist.uri, position: 0, deviceID: deviceID)
-            plan = Array(newPlan.prefix(100))
-            currentIndex = 0
-            prepared = nil
-            let ok = await waitForPlayback(matching: { state in
-                state.isPlaying && (state.context?.uri?.hasSuffix(playlist.id) ?? false)
-            }) != nil
-            trace(ok ? "Naujas sąrašas groja" : "Naujo sąrašo patvirtinimo nesulaukta")
-            return ok
+            playlist = try await prepareStationPlaylist(uris: newPlan.map(\.uri))
         } catch {
-            trace("Naujo sąrašo paleisti nepavyko: \(error.localizedDescription)")
+            trace("Grojaraščio atnaujinti nepavyko: \(error.localizedDescription)")
             return false
         }
+        plan = Array(newPlan.prefix(100))
+        currentIndex = 0
+        prepared = nil
+        try? await Task.sleep(for: .milliseconds(800))
+
+        let play: () async throws -> Void = {
+            try await self.api.playContext(playlist.uri, position: 0, deviceID: self.deviceID)
+        }
+        let stationPlays: (SpotifyPlaybackState) -> Bool = { state in
+            state.isPlaying && (state.context?.uri?.hasSuffix(playlist.id) ?? false)
+        }
+
+        var ok = false
+        do {
+            try await play()
+            ok = await waitForPlayback(matching: stationPlays) != nil
+        } catch {
+            trace("Naujo sąrašo paleisti nepavyko: \(error.localizedDescription)")
+        }
+        // Spotify užmigo (pvz. po pauzės) – pažadiname, jei OnAir ekrane.
+        if !ok && UIApplication.shared.applicationState == .active {
+            wakeCancelled = false
+            ok = await wakeSpotifyAndRetry("naujas sąrašas", action: play, verify: stationPlays)
+        }
+        trace(ok ? "Naujas sąrašas groja" : "Naujo sąrašo paleisti nepavyko")
+        return ok
+    }
+
+    /// Įrašo dabar grojančią dainą kaip išklausytą (ne praleistą) – kai sąrašą keičiame mes patys.
+    private func recordCurrentAsInterrupted() {
+        guard let current = nowPlaying, let startedAt = currentTrackStartedAt else { return }
+        let listened = min(current.durationMs, Int(Date().timeIntervalSince(startedAt) * 1000))
+        store.recordPlay(current, listenedMs: listened, skipped: false)
+        currentTrackStartedAt = nil
     }
 
     // MARK: - Spotify žadinimas
@@ -324,6 +349,13 @@ final class StationEngine: ObservableObject {
 
             do {
                 try await action()
+            } catch let error as SpotifyAPIError where error.status == 403 {
+                if await waitForPlayback(matching: verify) != nil {
+                    trace("Spotify jau groja (bandymas \(attempt))")
+                    return true
+                }
+                trace("Bandymas \(attempt): \(error.localizedDescription)")
+                continue
             } catch {
                 trace("Bandymas \(attempt): \(error.localizedDescription)")
                 continue
@@ -398,9 +430,19 @@ final class StationEngine: ObservableObject {
     }
 
     func togglePlayPause() async {
+        // Pirmiausia tikroji būsena – ekrane rodoma galėjo pasenti.
+        if let state = try? await api.playbackState() {
+            isPlaying = state.isPlaying
+            progressMs = state.progressMs ?? progressMs
+            progressUpdatedAt = Date()
+        }
+
         if isPlaying {
             do {
                 try await api.pause(deviceID: deviceID)
+                isPlaying = false
+            } catch let error as SpotifyAPIError where error.status == 403 {
+                // „Restriction violated“ – jau sustabdyta.
                 isPlaying = false
             } catch {
                 trace("Pauzės klaida: \(error.localizedDescription)")
@@ -415,6 +457,9 @@ final class StationEngine: ObservableObject {
         audio.stopKeepAlive()
         do {
             try await api.resume(deviceID: deviceID)
+            resumed = await waitForPlayback(matching: { $0.isPlaying }) != nil
+        } catch let error as SpotifyAPIError where error.status == 403 {
+            // „Restriction violated“ dažniausiai reiškia, kad jau groja.
             resumed = await waitForPlayback(matching: { $0.isPlaying }) != nil
         } catch {
             trace("Tęsti nepavyko: \(error.localizedDescription)")
@@ -447,6 +492,8 @@ final class StationEngine: ObservableObject {
         let previousVibe = currentVibe
         switchingVibe = vibe
         currentVibe = vibe
+        // Kol keičiame sąrašą, stebėjimas nereikalingas (kitaip perjungimas atrodytų kaip „praleista“).
+        stopMonitor()
         trace("Vibe: \(previousVibe.title) → \(vibe.title)")
 
         let talkTask = Task { await self.talk(.vibeSwitch(from: previousVibe, to: vibe)) }
@@ -460,6 +507,7 @@ final class StationEngine: ObservableObject {
         } else {
             // Leidžiame Dėdžiui baigti sakinį prieš perjungiant dainą.
             await talkTask.value
+            recordCurrentAsInterrupted()
             if await replaceAndPlay(newPlan) {
                 tracksSinceTalk = 0
                 tracksUntilTalk = talkEvery
