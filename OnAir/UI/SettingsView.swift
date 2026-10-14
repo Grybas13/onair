@@ -9,6 +9,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.voiceID) private var voiceID = ""
     @AppStorage(SettingsKeys.speechRate) private var speechRate = 0.5
     @AppStorage(SettingsKeys.talkMode) private var talkMode = "duck"
+    @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "kokoro"
+    @AppStorage(SettingsKeys.kokoroVoice) private var kokoroVoice = KokoroEngine.defaultVoice
+    @ObservedObject private var kokoroModel = KokoroModelStore.shared
 
     @State private var voices: [AVSpeechSynthesisVoice] = []
 
@@ -24,20 +27,35 @@ struct SettingsView: View {
                         Text("Sustabdyti muziką").tag("pause")
                     }
                 } header: {
-                    Text("DJ")
+                    Text("Dėdis")
                 } footer: {
-                    Text("„Patylinti“ – kaip tikrame radijuje, DJ kalba ant dainos pradžios. Jei patylinimas neveikia, rinkis „Sustabdyti“.")
+                    Text("„Patylinti“ – kaip tikrame radijuje, Dėdis kalba ant dainos pradžios. Jei patylinimas neveikia, rinkis „Sustabdyti“.")
                 }
 
                 Section {
-                    Picker("Balsas", selection: $voiceID) {
-                        Text("Automatiškai (geriausias)").tag("")
-                        ForEach(voices, id: \.identifier) { voice in
-                            Text("\(voice.name) · \(voice.language) · \(DJVoice.qualityLabel(voice))")
-                                .tag(voice.identifier)
-                        }
+                    Picker("Balso variklis", selection: $voiceEngine) {
+                        Text("Kokoro (neuroninis)").tag("kokoro")
+                        Text("Apple").tag("apple")
                     }
-                    .pickerStyle(.navigationLink)
+
+                    if voiceEngine == "kokoro" {
+                        kokoroModelRow
+                        Picker("Kokoro balsas", selection: $kokoroVoice) {
+                            ForEach(KokoroEngine.voiceNames) { voice in
+                                Text(voice.title).tag(voice.id)
+                            }
+                        }
+                        .pickerStyle(.navigationLink)
+                    } else {
+                        Picker("Apple balsas", selection: $voiceID) {
+                            Text("Automatiškai (geriausias)").tag("")
+                            ForEach(voices, id: \.identifier) { voice in
+                                Text("\(voice.name) · \(voice.language) · \(DJVoice.qualityLabel(voice))")
+                                    .tag(voice.identifier)
+                            }
+                        }
+                        .pickerStyle(.navigationLink)
+                    }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Kalbėjimo greitis")
@@ -57,7 +75,11 @@ struct SettingsView: View {
                 } header: {
                     Text("Balsas")
                 } footer: {
-                    Text("Natūralesnius balsus galima nemokamai atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English. Rinkis „Enhanced“ arba „Premium“, tada grįžk čia.")
+                    if voiceEngine == "kokoro" {
+                        Text("Kokoro – neuroninis balsas, veikiantis pačiame telefone, be interneto ir be limitų. Modelį (327 MB) reikia atsisiųsti vieną kartą, geriausia per Wi-Fi. Kol jo nėra, Dėdis kalba Apple balsu.")
+                    } else {
+                        Text("Natūralesnius Apple balsus galima nemokamai atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English. Rinkis „Enhanced“ arba „Premium“.")
+                    }
                 }
 
                 Section("Spotify") {
@@ -77,13 +99,62 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("OnAir 0.2 · 2 etapas")
+                    Text("OnAir 0.3 · 3 etapas")
                         .foregroundStyle(Theme.muted)
                 }
             }
             .navigationTitle("Nustatymai")
             .onAppear {
                 voices = DJVoice.englishVoices()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var kokoroModelRow: some View {
+        switch kokoroModel.state {
+        case .ready:
+            HStack {
+                Text("Modelis")
+                Spacer()
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Theme.spotifyGreen)
+                Text("Paruoštas")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.muted)
+            }
+        case .missing:
+            Button {
+                kokoroModel.download()
+            } label: {
+                Label("Atsisiųsti balso modelį (327 MB)", systemImage: "arrow.down.circle.fill")
+            }
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Siunčiama…")
+                    Spacer()
+                    Text("\(Int(progress * 100)) %")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(Theme.muted)
+                }
+                ProgressView(value: progress)
+                    .tint(Theme.accent)
+                Button("Atšaukti", role: .cancel) {
+                    kokoroModel.cancel()
+                }
+                .font(.footnote)
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Nepavyko: \(message)")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                Button {
+                    kokoroModel.download()
+                } label: {
+                    Label("Bandyti dar kartą", systemImage: "arrow.clockwise")
+                }
             }
         }
     }

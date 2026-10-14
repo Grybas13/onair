@@ -120,3 +120,15 @@ OnAir/
 ├─ UI/         Ekranai
 └─ Support/    Žurnalas, Keychain
 ```
+
+## Kokoro balsas
+
+Dėdis gali kalbėti neuroniniu **Kokoro** balsu, kuris veikia pačiame telefone, be interneto ir be limitų.
+
+1. **Nustatymai → Balsas → Balso variklis: Kokoro.**
+2. Spausk **„Atsisiųsti balso modelį (327 MB)“**, geriausia per Wi-Fi. Tai reikia padaryti tik vieną kartą: modelis išlieka ir perdiegus programėlę.
+3. Pasirink balsą (pvz. „Michael“, „Fenrir“, „Puck“) ir spausk **„Išbandyti balsą“**.
+
+Kol modelis neatsisiųstas, Dėdis kalba Apple balsu. Kokoro veikia tik procesoriumi, nes iOS neleidžia naudoti vaizdo plokštės užrakintu ekranu.
+
+Kokoro-82M modelis ir balsų stiliai – [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0); Swift versija – [mlalma/kokoro-ios](https://github.com/mlalma/kokoro-ios) (MIT).

@@ -14,7 +14,7 @@ final class GroqClient {
         guard isConfigured else { return nil }
         guard Date() >= pausedUntil else { return nil }
 
-        var index = 0
+        let index = 0
         while index < models.count {
             let model = models[index]
             let outcome = await request(model: model, system: system, user: user)

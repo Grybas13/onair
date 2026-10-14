@@ -8,6 +8,18 @@ options:
     iOS: "18.0"
   createIntermediateGroups: true
 
+packages:
+  # Kokoro neuroninis balsas (MLX). Prisegta prie konkrečios versijos, kad kompiliavimas būtų stabilus.
+  KokoroSwift:
+    url: https://github.com/mlalma/kokoro-ios
+    revision: 4d6d1d8ff8cd012014180c9cd4cf0151e7682354
+  MLXSwift:
+    url: https://github.com/ml-explore/mlx-swift
+    exactVersion: 0.30.2
+  MLXUtilsLibrary:
+    url: https://github.com/mlalma/MLXUtilsLibrary.git
+    exactVersion: 0.0.6
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -20,6 +32,11 @@ targets:
     platform: iOS
     sources:
       - path: OnAir
+    dependencies:
+      - package: KokoroSwift
+      - package: MLXSwift
+        product: MLX
+      - package: MLXUtilsLibrary
     scheme: {}
     info:
       path: OnAir/Info.plist

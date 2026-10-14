@@ -97,6 +97,7 @@ final class StationEngine: ObservableObject {
         wakeCancelled = false
         prepared = nil
         trace("Stotis: paleidžiama (vibe: \(currentVibe.title))")
+        voice.warmUp()
 
         do {
             try await loadPool()

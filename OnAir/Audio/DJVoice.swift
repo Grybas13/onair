@@ -50,7 +50,36 @@ final class DJVoice: NSObject, ObservableObject {
         return await task.value
     }
 
+    /// Ar naudoti Kokoro (pasirinkta ir modelis atsisiųstas).
+    static var usesKokoro: Bool {
+        UserDefaults.standard.string(forKey: SettingsKeys.voiceEngine) == "kokoro" && KokoroModelStore.isModelReady
+    }
+
+    /// Iš anksto įkelia Kokoro modelį, kad pirmas Dėdžio sakinys nevėluotų.
+    func warmUp() {
+        guard Self.usesKokoro, !KokoroEngine.shared.isLoaded else { return }
+        Task.detached(priority: .utility) {
+            _ = KokoroEngine.shared.loadIfNeeded()
+        }
+    }
+
     private func renderNow(_ text: String) async -> [AVAudioPCMBuffer] {
+        if Self.usesKokoro {
+            let voiceID = UserDefaults.standard.string(forKey: SettingsKeys.kokoroVoice) ?? KokoroEngine.defaultVoice
+            let rate = UserDefaults.standard.double(forKey: SettingsKeys.speechRate)
+            let speed = Float(1 + ((rate > 0 ? rate : 0.5) - 0.5) * 3)
+            let samples = await Task.detached(priority: .userInitiated) {
+                KokoroEngine.shared.synthesize(text, voice: voiceID, speed: speed)
+            }.value
+            if let samples, let buffer = KokoroEngine.buffer(from: samples) {
+                return [buffer]
+            }
+            trace("Kokoro balsas nepavyko – šįkart naudoju Apple balsą")
+        }
+        return await renderWithApple(text)
+    }
+
+    private func renderWithApple(_ text: String) async -> [AVAudioPCMBuffer] {
         let utterance = makeUtterance(text)
         let collector = SpeechBufferCollector()
         let words = Double(text.split(separator: " ").count)
