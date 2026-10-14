@@ -11,7 +11,9 @@ final class AudioController {
     private let silenceNode = AVAudioPlayerNode()
     /// DJ balsas groja per tą patį variklį, kad garso sesija visada priklausytų tik mums.
     private let speechNode = AVAudioPlayerNode()
-    private var speechFormat: AVAudioFormat?
+    /// Visas DJ balsas paverčiamas į vieną pastovų formatą – kad greitis ir tonas
+    /// visada būtų teisingi, nepriklausomai nuo balso variklio (Apple 22 kHz, Kokoro 24 kHz).
+    private let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
     private var silenceBuffer: AVAudioPCMBuffer?
     private var observers: [NSObjectProtocol] = []
 
@@ -23,6 +25,7 @@ final class AudioController {
         engine.attach(silenceNode)
         engine.connect(silenceNode, to: engine.mainMixerNode, format: format)
         engine.attach(speechNode)
+        engine.connect(speechNode, to: engine.mainMixerNode, format: speechFormat)
 
         let frames: AVAudioFrameCount = 44_100
         if let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) {
@@ -77,8 +80,12 @@ final class AudioController {
     // MARK: - DJ balsas
 
     /// Sugroja paruoštus DJ balso garso buferius ir grįžta, kai jie baigiasi.
-    func playSpeech(_ buffers: [AVAudioPCMBuffer]) async {
-        guard let first = buffers.first else { return }
+    func playSpeech(_ input: [AVAudioPCMBuffer]) async {
+        guard let converted = Self.convertForSpeech(input, to: speechFormat) else {
+            trace("Audio: balso garso nepavyko paruošti")
+            return
+        }
+        let buffers = [converted]
         do {
             if !engine.isRunning {
                 try AVAudioSession.sharedInstance().setActive(true)
@@ -90,11 +97,6 @@ final class AudioController {
             return
         }
 
-        if speechFormat == nil || speechFormat != first.format {
-            engine.disconnectNodeOutput(speechNode)
-            engine.connect(speechNode, to: engine.mainMixerNode, format: first.format)
-            speechFormat = first.format
-        }
 
         let totalSeconds = buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }
         let gate = ResumeGate()
@@ -117,6 +119,50 @@ final class AudioController {
             }
         }
         speechNode.stop()
+    }
+
+    /// Sujungia buferius į vieną ir perskaičiuoja į nurodytą formatą (dažnį ir kanalus).
+    static func convertForSpeech(_ buffers: [AVAudioPCMBuffer], to target: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let first = buffers.first else { return nil }
+        let format = first.format
+        let total = buffers.reduce(0) { $0 + Int($1.frameLength) }
+        guard total > 0,
+              let merged = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(total)),
+              let destination = merged.floatChannelData else { return nil }
+
+        var offset = 0
+        for buffer in buffers where buffer.format == format {
+            guard let source = buffer.floatChannelData else { continue }
+            let frames = Int(buffer.frameLength)
+            for channel in 0..<Int(format.channelCount) {
+                (destination[channel] + offset).update(from: source[channel], count: frames)
+            }
+            offset += frames
+        }
+        merged.frameLength = AVAudioFrameCount(offset)
+
+        if format == target { return merged }
+        guard let converter = AVAudioConverter(from: format, to: target) else { return nil }
+        let ratio = target.sampleRate / format.sampleRate
+        let capacity = AVAudioFrameCount(Double(merged.frameLength) * ratio) + 4096
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+
+        var delivered = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, inputStatus in
+            if delivered {
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            delivered = true
+            inputStatus.pointee = .haveData
+            return merged
+        }
+        if status == .error || output.frameLength == 0 {
+            trace("Audio: perskaičiavimo klaida \(error?.localizedDescription ?? "")")
+            return nil
+        }
+        return output
     }
 
     // MARK: - Patylinimas

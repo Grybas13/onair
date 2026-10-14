@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 
 /// DJ balsas: nemokamas Apple sistemos balsas (AVSpeechSynthesizer).
 /// Geresnės kokybės balsus galima atsisiųsti: Nustatymai → Pritaikymas neįgaliesiems →
@@ -63,18 +64,27 @@ final class DJVoice: NSObject, ObservableObject {
         }
     }
 
+    private var loggedBackgroundFallback = false
+
     private func renderNow(_ text: String) async -> [AVAudioPCMBuffer] {
-        if Self.usesKokoro {
+        // Kokoro (MLX) greitas tik su GPU, o GPU iOS leidžia tik programėlei esant ekrane.
+        // Fone (užrakintas ekranas) kol kas kalba Apple balsas.
+        let inForeground = UIApplication.shared.applicationState == .active
+        if Self.usesKokoro && inForeground {
+            loggedBackgroundFallback = false
             let voiceID = UserDefaults.standard.string(forKey: SettingsKeys.kokoroVoice) ?? KokoroEngine.defaultVoice
             let rate = UserDefaults.standard.double(forKey: SettingsKeys.speechRate)
-            let speed = Float(1 + ((rate > 0 ? rate : 0.5) - 0.5) * 3)
+            let speed = Float(0.92 + ((rate > 0 ? rate : 0.5) - 0.5) * 2.5)
             let samples = await Task.detached(priority: .userInitiated) {
-                KokoroEngine.shared.synthesize(text, voice: voiceID, speed: speed)
+                KokoroEngine.shared.synthesize(text, voice: voiceID, speed: speed, useGPU: true)
             }.value
             if let samples, let buffer = KokoroEngine.buffer(from: samples) {
                 return [buffer]
             }
             trace("Kokoro balsas nepavyko – šįkart naudoju Apple balsą")
+        } else if Self.usesKokoro && !loggedBackgroundFallback {
+            loggedBackgroundFallback = true
+            trace("Kokoro fone neveikia (iOS draudžia GPU) – kalba Apple balsas")
         }
         return await renderWithApple(text)
     }

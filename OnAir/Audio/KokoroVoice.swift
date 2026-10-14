@@ -276,7 +276,8 @@ final class KokoroEngine: @unchecked Sendable {
     }
 
     /// Sugeneruoja balsą. Ilgą tekstą skaido sakiniais (modelis turi ribą).
-    func synthesize(_ text: String, voice: String, speed: Float) -> [Float]? {
+    /// `useGPU` – tik kai programėlė ekrane (fone iOS GPU draudžia; CPU per lėtas – ~0.1x).
+    func synthesize(_ text: String, voice: String, speed: Float, useGPU: Bool) -> [Float]? {
         guard loadIfNeeded() else { return nil }
         lock.lock(); defer { lock.unlock() }
         guard let tts else { return nil }
@@ -291,7 +292,7 @@ final class KokoroEngine: @unchecked Sendable {
             do {
                 KokoroCrashGuard.begin("kalbos generavimas")
                 defer { KokoroCrashGuard.end() }
-                let (audio, _) = try Device.withDefaultDevice(.cpu) {
+                let (audio, _) = try Device.withDefaultDevice(useGPU ? .gpu : .cpu) {
                     try tts.generateAudio(voice: style, language: language, text: sentence, speed: speed)
                 }
                 if !samples.isEmpty { samples += pause }
