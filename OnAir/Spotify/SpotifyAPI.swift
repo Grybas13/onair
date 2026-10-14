@@ -79,6 +79,18 @@ final class SpotifyAPI {
         try await send("PUT", "me/player/play", query: query, json: ["uris": uris])
     }
 
+    /// Groja kontekstą (grojaraštį) nuo nurodytos pozicijos.
+    /// Spotify iPhone programėlė (nuo 2026 rudens) patikimai paleidžia tik kontekstus,
+    /// o ne „plikus“ dainų sąrašus (uris).
+    func playContext(_ contextURI: String, position: Int, deviceID: String?) async throws {
+        var query: [String: String] = [:]
+        if let deviceID { query["device_id"] = deviceID }
+        try await send("PUT", "me/player/play", query: query, json: [
+            "context_uri": contextURI,
+            "offset": ["position": position]
+        ])
+    }
+
     func resume(deviceID: String?) async throws {
         var query: [String: String] = [:]
         if let deviceID { query["device_id"] = deviceID }
@@ -113,6 +125,28 @@ final class SpotifyAPI {
         var query: [String: String] = ["state": mode]
         if let deviceID { query["device_id"] = deviceID }
         try await send("PUT", "me/player/repeat", query: query)
+    }
+
+    // MARK: - Grojaraščiai
+
+    func createPlaylist(name: String, description: String) async throws -> SpotifyPlaylist {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "name": name,
+            "description": description,
+            "public": false
+        ] as [String: Any])
+        let (data, _) = try await perform("POST", "me/playlists", query: [:], body: body)
+        return try decoder.decode(SpotifyPlaylist.self, from: data)
+    }
+
+    /// Pakeičia visas grojaraščio dainas (iki 100).
+    func replacePlaylistItems(playlistID: String, uris: [String]) async throws {
+        try await send("PUT", "playlists/\(playlistID)/items", json: ["uris": uris])
+    }
+
+    /// Prideda dainas į grojaraščio galą (iki 100).
+    func addPlaylistItems(playlistID: String, uris: [String]) async throws {
+        try await send("POST", "playlists/\(playlistID)/items", json: ["uris": uris])
     }
 
     // MARK: - Užklausos

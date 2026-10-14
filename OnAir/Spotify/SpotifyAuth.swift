@@ -5,6 +5,13 @@ struct SpotifyTokens: Codable {
     var accessToken: String
     var refreshToken: String
     var expiresAt: Date
+    /// Leidimai, kuriuos Spotify suteikė (tarpais atskirti).
+    var scope: String?
+
+    var grantsAllRequiredScopes: Bool {
+        let granted = Set((scope ?? "").split(separator: " ").map(String.init))
+        return Config.scopes.allSatisfy { granted.contains($0) }
+    }
 }
 
 enum SpotifyAuthError: LocalizedError {
@@ -38,6 +45,8 @@ enum SpotifyAuthError: LocalizedError {
 @MainActor
 final class SpotifyAuth: ObservableObject {
     @Published private(set) var isLoggedIn = false
+    /// Paaiškinimas, kodėl reikia prisijungti iš naujo (pvz. atnaujinta programėlė prašo naujų leidimų).
+    @Published private(set) var reloginReason: String?
 
     private var tokens: SpotifyTokens?
     private var pendingVerifier: String?
@@ -48,8 +57,14 @@ final class SpotifyAuth: ObservableObject {
     init() {
         if let data = Keychain.get(keychainKey),
            let saved = try? JSONDecoder().decode(SpotifyTokens.self, from: data) {
-            tokens = saved
-            isLoggedIn = true
+            if saved.grantsAllRequiredScopes {
+                tokens = saved
+                isLoggedIn = true
+            } else {
+                Keychain.delete(keychainKey)
+                reloginReason = "Nauja OnAir versija prašo papildomų leidimų (OnAir grojaraščiui). Prisijunk iš naujo."
+                trace("Spotify: trūksta leidimų, reikia prisijungti iš naujo")
+            }
         }
     }
 
@@ -92,7 +107,8 @@ final class SpotifyAuth: ObservableObject {
                 "client_id": Config.spotifyClientID,
                 "code_verifier": verifier
             ],
-            fallbackRefreshToken: nil
+            fallbackRefreshToken: nil,
+            fallbackScope: nil
         )
         pendingVerifier = nil
         pendingState = nil
@@ -129,7 +145,8 @@ final class SpotifyAuth: ObservableObject {
                     "refresh_token": refreshToken,
                     "client_id": Config.spotifyClientID
                 ],
-                fallbackRefreshToken: refreshToken
+                fallbackRefreshToken: refreshToken,
+                fallbackScope: current.scope
             )
         }
         refreshTask = task
@@ -157,15 +174,17 @@ final class SpotifyAuth: ObservableObject {
             Keychain.set(data, for: keychainKey)
         }
         isLoggedIn = true
+        reloginReason = nil
     }
 
     private struct TokenResponse: Decodable {
         let access_token: String
         let expires_in: Int
         let refresh_token: String?
+        let scope: String?
     }
 
-    private func requestTokens(params: [String: String], fallbackRefreshToken: String?) async throws -> SpotifyTokens {
+    private func requestTokens(params: [String: String], fallbackRefreshToken: String?, fallbackScope: String?) async throws -> SpotifyTokens {
         var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -186,7 +205,8 @@ final class SpotifyAuth: ObservableObject {
         return SpotifyTokens(
             accessToken: decoded.access_token,
             refreshToken: refresh,
-            expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in))
+            expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in)),
+            scope: decoded.scope ?? fallbackScope
         )
     }
 

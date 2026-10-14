@@ -41,6 +41,7 @@ final class StationEngine: ObservableObject {
     private var recentForRecap: [SpotifyTrack] = []
     private var isTalking = false
     private var wakeCancelled = false
+    private var stationPlaylistID: String?
     private let initialPlanSize = 12
     private let refillSize = 6
 
@@ -57,11 +58,14 @@ final class StationEngine: ObservableObject {
     // MARK: - Valdymas
 
     /// Paleidimo eiga:
-    /// 1. Sudaromas dainų sąrašas.
-    /// 2. Jei Spotify šiame telefone jau groja (vadinasi, nemiega) – siunčiame sąrašą tiesiai.
-    /// 3. Kitaip Spotify programėlė greičiausiai užmigdyta: komanda per serverį „praeitų“,
-    ///    bet muzika nepasileistų. Todėl pirmiausia atidarome Spotify ir tik tada siunčiame.
-    /// 4. DJ prabyla tik įsitikinus, kad pirma daina tikrai groja.
+    /// 1. Sudaromas dainų sąrašas ir įrašomas į privatų grojaraštį „OnAir Radio“.
+    ///    (Spotify iPhone programėlė nuo 2026 rudens patikimai groja tik kontekstus –
+    ///    grojaraščius ar albumus –, o ne „plikus“ dainų sąrašus.)
+    /// 2. Bandoma paleisti tiesiogiai. Jei Spotify telefone miega ir muzika nepasileidžia,
+    ///    atidarome Spotify programėlę ir kartojame.
+    /// 3. DJ prabyla tik įsitikinus, kad stotis tikrai groja.
+    /// Fono palaikymas (tyla) įjungiamas tik tada, kai Spotify jau groja – kad netrukdytų
+    /// Spotify pradėti grojimą fone.
     func start() async {
         guard phase != .starting, phase != .wakingSpotify else { return }
         stopMonitor()
@@ -85,45 +89,60 @@ final class StationEngine: ObservableObject {
         plan = []
         plan = takeNext(count: initialPlanSize)
         currentIndex = 0
-        guard let firstURI = plan.first?.uri else {
+        guard !plan.isEmpty else {
             phase = .failed("Nepavyko sudaryti dainų sąrašo.")
             return
         }
 
-        // Fono palaikymas reikalingas jau dabar: kol Spotify bus atidarytas priekyje,
-        // OnAir turi likti gyva fone ir užbaigti paleidimą.
-        audio.startKeepAlive()
+        let playlist: SpotifyPlaylist
+        do {
+            playlist = try await prepareStationPlaylist(uris: plan.map(\.uri))
+        } catch {
+            trace("Grojaraščio klaida: \(error.localizedDescription)")
+            phase = .failed("Nepavyko paruošti grojaraščio „OnAir Radio“: \(error.localizedDescription)")
+            return
+        }
+        stationPlaylistID = playlist.id
+        // Leidžiame Spotify serveriams „pamatyti“ atnaujintą grojaraštį.
+        try? await Task.sleep(for: .milliseconds(800))
 
-        let uris = plan.map(\.uri)
         let playStation: () async throws -> Void = {
             await self.prepareSpotifyOrder()
-            try await self.api.play(uris: uris, deviceID: self.deviceID)
+            try await self.api.playContext(playlist.uri, position: 0, deviceID: self.deviceID)
         }
-        let firstTrackPlays: (SpotifyPlaybackState) -> Bool = { state in
-            state.isPlaying && state.item?.uri == firstURI
+        let stationPlays: (SpotifyPlaybackState) -> Bool = { state in
+            state.isPlaying && (state.context?.uri?.hasSuffix(playlist.id) ?? false)
         }
 
-        // Ar Spotify šiame telefone jau groja?
+        // 1. Tiesiogiai
         var started = false
-        if let state = try? await api.playbackState(),
-           state.isPlaying,
-           let device = state.device, device.type == "Smartphone", let id = device.id {
-            deviceID = id
+        if let state = try? await api.playbackState() {
+            trace("Spotify būsena prieš paleidimą: \(state.summary)")
+        } else {
+            trace("Spotify būsena prieš paleidimą: nieko negroja")
+        }
+        if let device = try? await findDevice(phoneOnly: true) {
+            deviceID = device.id
             deviceName = device.name
-            trace("Spotify jau groja telefone – siunčiu sąrašą tiesiai")
             do {
                 try await playStation()
-                started = await waitForPlayback(matching: firstTrackPlays) != nil
+                started = await waitForPlayback(matching: stationPlays) != nil
             } catch {
                 trace("Tiesioginis paleidimas nepavyko: \(error.localizedDescription)")
             }
+            if !started {
+                trace("Tiesiogiai nepasileido – Spotify greičiausiai miega")
+            }
         } else {
-            trace("Spotify šiame telefone negroja – greičiausiai miega")
+            trace("Telefono nėra tarp Spotify įrenginių")
         }
 
+        // 2. Žadinimas
         if !started {
             phase = .wakingSpotify
-            started = await wakeSpotifyAndRetry("paleidimas", action: playStation, verify: firstTrackPlays)
+            // Kol Spotify atidarytas priekyje, OnAir turi išlikti gyva fone.
+            audio.startKeepAlive()
+            started = await wakeSpotifyAndRetry("paleidimas", action: playStation, verify: stationPlays)
         }
 
         guard started else {
@@ -138,7 +157,35 @@ final class StationEngine: ObservableObject {
             return
         }
 
+        audio.startKeepAlive()
         goOnAir()
+    }
+
+    /// Paruošia privatų grojaraštį „OnAir Radio“: perrašo jo dainas arba sukuria naują.
+    private func prepareStationPlaylist(uris: [String]) async throws -> SpotifyPlaylist {
+        let defaults = UserDefaults.standard
+        let idKey = "stationPlaylistID"
+        let uriKey = "stationPlaylistURI"
+
+        if let id = defaults.string(forKey: idKey), let uri = defaults.string(forKey: uriKey) {
+            do {
+                try await api.replacePlaylistItems(playlistID: id, uris: uris)
+                trace("Grojaraštis „OnAir Radio“ atnaujintas (\(uris.count) dainų)")
+                return SpotifyPlaylist(id: id, uri: uri, name: "OnAir Radio")
+            } catch let error as SpotifyAPIError where error.status == 404 || error.status == 403 {
+                trace("Senas grojaraštis nepasiekiamas (\(error.status ?? 0)) – kuriu naują")
+            }
+        }
+
+        let created = try await api.createPlaylist(
+            name: "OnAir Radio",
+            description: "Tavo OnAir stotis. Šį grojaraštį OnAir atnaujina automatiškai."
+        )
+        defaults.set(created.id, forKey: idKey)
+        defaults.set(created.uri, forKey: uriKey)
+        try await api.replacePlaylistItems(playlistID: created.id, uris: uris)
+        trace("Sukurtas grojaraštis „OnAir Radio“ (\(uris.count) dainų)")
+        return created
     }
 
     /// Atšaukia Spotify žadinimą (mygtukas ekrane).
@@ -213,10 +260,17 @@ final class StationEngine: ObservableObject {
 
     /// Kelias sekundes tikrina grotuvo būseną, kol ji atitinka sąlygą.
     private func waitForPlayback(matching verify: (SpotifyPlaybackState) -> Bool) async -> SpotifyPlaybackState? {
+        var lastState: SpotifyPlaybackState?
+        defer {
+            if let lastState, !verify(lastState) {
+                trace("Paskutinė matyta būsena: \(lastState.summary)")
+            }
+        }
         for _ in 0..<7 {
             try? await Task.sleep(for: .milliseconds(700))
             if wakeCancelled { return nil }
             guard let state = try? await api.playbackState() else { continue }
+            lastState = state
             if verify(state) {
                 if let item = state.item {
                     lastSeenURI = item.uri
@@ -270,8 +324,10 @@ final class StationEngine: ObservableObject {
         }
 
         // Tęsti: jei Spotify per pauzę užmigo, komanda nesuveiks – tada pažadiname.
+        // Tylos grotuvą trumpam išjungiame, kad netrukdytų Spotify pradėti grojimą.
         var resumed = false
         wakeCancelled = false
+        audio.stopKeepAlive()
         do {
             try await api.resume(deviceID: deviceID)
             resumed = await waitForPlayback(matching: { $0.isPlaying }) != nil
@@ -279,6 +335,7 @@ final class StationEngine: ObservableObject {
             trace("Tęsti nepavyko: \(error.localizedDescription)")
         }
         if !resumed {
+            audio.startKeepAlive()
             resumed = await wakeSpotifyAndRetry(
                 "tęsimas",
                 action: { try await self.api.resume(deviceID: self.deviceID) },
@@ -287,6 +344,9 @@ final class StationEngine: ObservableObject {
         }
         if !resumed {
             trace("Spotify nepavyko pažadinti – atidaryk Spotify ir paspausk groti")
+        }
+        if phase == .onAir {
+            audio.startKeepAlive()
         }
         startMonitor(initialDelay: 1)
     }
@@ -472,7 +532,7 @@ final class StationEngine: ObservableObject {
     private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack) async {
         trace("Nauja daina: \(current.name) – \(current.artistNames)")
 
-        if let index = plan.firstIndex(where: { $0.uri == current.uri }) {
+        if let index = planIndex(of: current) {
             currentIndex = index
         } else {
             currentIndex = nil
@@ -497,22 +557,40 @@ final class StationEngine: ObservableObject {
         await refillIfNeeded()
     }
 
-    /// Kai groja paskutinė plano daina, į Spotify eilę pridedame naujų.
-    /// (Spotify eilė groja prieš likusias sąrašo dainas, todėl pildome tik pačiame gale.)
-    private func refillIfNeeded() async {
-        guard let index = currentIndex, index >= plan.count - 1 else { return }
-        let more = takeNext(count: refillSize)
-        var added = 0
-        for track in more {
-            do {
-                try await api.addToQueue(uri: track.uri, deviceID: deviceID)
-                plan.append(track)
-                added += 1
-            } catch {
-                trace("Į eilę pridėti nepavyko: \(error.localizedDescription)")
-                break
-            }
+    /// Randa dainą plane. Spotify kartais groja kitą tos pačios dainos versiją (kitas ID),
+    /// todėl, neradus pagal URI, ieškome pagal pavadinimą ir atlikėją.
+    private func planIndex(of track: SpotifyTrack) -> Int? {
+        let searchFrom = currentIndex ?? 0
+        if let index = plan.indices.first(where: { $0 >= searchFrom && plan[$0].uri == track.uri }) {
+            return index
         }
-        trace("Į eilę pridėta dainų: \(added)")
+        if let index = plan.firstIndex(where: { $0.uri == track.uri }) {
+            return index
+        }
+        let key = Self.matchKey(track)
+        if let index = plan.indices.first(where: { $0 >= searchFrom && Self.matchKey(plan[$0]) == key }) {
+            return index
+        }
+        return plan.firstIndex { Self.matchKey($0) == key }
+    }
+
+    private static func matchKey(_ track: SpotifyTrack) -> String {
+        DJScript.cleanTitle(track.name).lowercased() + "|" + track.primaryArtist.lowercased()
+    }
+
+    /// Kai iki plano pabaigos lieka 3 dainos, į grojaraščio galą pridedame naujų.
+    /// Spotify groja grojaraštį iš eilės, todėl naujos dainos tiesiog tęsia eterį.
+    private func refillIfNeeded() async {
+        guard let index = currentIndex, plan.count - index - 1 <= 3,
+              let playlistID = stationPlaylistID else { return }
+        let more = takeNext(count: refillSize)
+        guard !more.isEmpty else { return }
+        do {
+            try await api.addPlaylistItems(playlistID: playlistID, uris: more.map(\.uri))
+            plan.append(contentsOf: more)
+            trace("Į grojaraštį pridėta dainų: \(more.count)")
+        } catch {
+            trace("Į grojaraštį pridėti nepavyko: \(error.localizedDescription)")
+        }
     }
 }

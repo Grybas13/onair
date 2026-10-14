@@ -78,12 +78,32 @@ struct SpotifyDevicesResponse: Decodable {
     let devices: [SpotifyDevice]
 }
 
+struct SpotifyContext: Decodable {
+    let uri: String?
+    let type: String?
+}
+
 struct SpotifyPlaybackState: Decodable {
     let device: SpotifyDevice?
     let isPlaying: Bool
     let progressMs: Int?
     let item: SpotifyTrack?
+    let context: SpotifyContext?
     let currentlyPlayingType: String?
+
+    /// Trumpas aprašas žurnalui.
+    var summary: String {
+        let track = item.map { "\($0.name) – \($0.primaryArtist)" } ?? "nėra dainos"
+        let ctx = context?.uri ?? "be konteksto"
+        let dev = device.map { "\($0.name)/\($0.type)" } ?? "be įrenginio"
+        return "\(isPlaying ? "groja" : "negroja"), \(track), \(ctx), \(dev)"
+    }
+}
+
+struct SpotifyPlaylist: Decodable {
+    let id: String
+    let uri: String
+    let name: String
 }
 
 struct SpotifyRecentlyPlayedItem: Decodable {

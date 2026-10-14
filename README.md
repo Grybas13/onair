@@ -103,7 +103,9 @@ Jei 3 testas neveikia, nustatymuose pabandyk „Kai DJ kalba → Sustabdyti muzi
 - **Muziką groja Spotify programėlė.** OnAir per Spotify Web API jai nusiunčia dainų sąrašą ir seka, kas groja. Būsena tikrinama kas ~15 s, o artėjant dainos pabaigai – tiksliai jos pabaigoje.
 - **DJ balsas** yra nemokamas Apple sistemos balsas. Kol jis kalba, iOS sumažina Spotify garsą („ducking“).
 - **Kad veiktų užrakintu ekranu,** OnAir fone groja tylą. Kitaip iOS programėlę užmigdytų.
-- **Dainų parinkimas.** OnAir paima tavo „Top“ dainas (4 sav., 6 mėn., visų laikų). Vengia dainų, kurias neseniai klausei, o to paties atlikėjo nededa dviejų iš eilės. Kai sąrašas baigiasi, į Spotify eilę prideda dar 6 dainas.
+- **Grojaraštis „OnAir Radio“.** Spotify iPhone programėlė nuo 2026 rudens nebepaleidžia per API atsiųstų „plikų“ dainų sąrašų, tik grojaraščius ar albumus. Todėl OnAir tavo bibliotekoje laiko privatų grojaraštį „OnAir Radio“ ir prieš kiekvieną eterį jį perrašo. Jo netrinkite – o jei ištrinsite, OnAir sukurs naują.
+- **Jei Spotify telefone miega,** OnAir trumpam atidaro Spotify programėlę, kad ji pabustų, ir tada paleidžia stotį.
+- **Dainų parinkimas.** OnAir paima tavo „Top“ dainas (4 sav., 6 mėn., visų laikų). Vengia dainų, kurias neseniai klausei, o to paties atlikėjo nededa dviejų iš eilės. Kai iki sąrašo pabaigos lieka 3 dainos, į grojaraštį prideda dar 6.
 
 ## Projekto struktūra
 

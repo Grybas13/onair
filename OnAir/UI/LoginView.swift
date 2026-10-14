@@ -26,6 +26,13 @@ struct LoginView: View {
 
                 Spacer()
 
+                if let reason = auth.reloginReason {
+                    Text(reason)
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.orange)
+                }
+
                 if !Config.isClientIDConfigured {
                     Text("Programėlė sukompiliuota be Spotify Client ID. Įrašyk SPOTIFY_CLIENT_ID GitHub nustatymuose ir paleisk kompiliavimą iš naujo (žr. README).")
                         .font(.footnote)
