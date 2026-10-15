@@ -106,6 +106,13 @@ jobs:
               MISSING=1
             fi
           done
+          if [ -d "$APP/PlugIns/OnAirWidget.appex" ]; then
+            echo "Widget: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' $APP/PlugIns/OnAirWidget.appex/Info.plist)"
+          else
+            echo "::error::Live Activity widget extension is missing from the app"
+            MISSING=1
+          fi
+          echo "Live Activities: $($PB -c 'Print :NSSupportsLiveActivities' $APP/Info.plist)"
           [ $MISSING -eq 0 ] || exit 1
           for KEY in SpotifyClientID LastFMAPIKey GroqAPIKey; do
             LEN=$($PB -c "Print :$KEY" $APP/Info.plist | tr -d '\n' | wc -c | tr -d ' ')

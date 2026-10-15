@@ -6,7 +6,7 @@ import Foundation
 @MainActor
 final class GroqClient {
     private let endpoint = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
-    private let models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    private let models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"]
     private var modelPausedUntil: [String: Date] = [:]
     private var pausedUntil = Date.distantPast
     private(set) var lastError: String?
@@ -30,7 +30,9 @@ final class GroqClient {
                 lastError = nil
                 return text
             case .modelProblem(let message):
-                modelPausedUntil[model] = Date().addingTimeInterval(30 * 60)
+                // Nesamas modelis – praleidžiame visai dienai, kitos klaidos – pusvalandžiui.
+                let pause: TimeInterval = message.contains("model_not_found") ? 24 * 3600 : 30 * 60
+                modelPausedUntil[model] = Date().addingTimeInterval(pause)
                 trace("Groq: \(model) – \(message). Bandau kitą modelį")
                 continue
             case .rateLimited(let seconds, let message):

@@ -1,6 +1,7 @@
 # Generuojama XcodeGen
 OnAir.xcodeproj/
 OnAir/Info.plist
+OnAirWidget/Info.plist
 
 # Kompiliavimo rezultatai
 build/

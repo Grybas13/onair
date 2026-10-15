@@ -13,6 +13,8 @@ enum SettingsKeys {
     static let voiceEngine = "voiceEngine2"
     /// Groq Orpheus balso ID (pvz. "troy").
     static let groqVoice = "groqVoice"
+    /// Ar rodyti Live Activity užrakintame ekrane.
+    static let liveActivity = "liveActivity"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -22,7 +24,8 @@ enum SettingsKeys {
             speechRate: 0.5,
             talkMode: "duck",
             voiceEngine: "groq",
-            groqVoice: GroqSpeech.defaultVoice
+            groqVoice: GroqSpeech.defaultVoice,
+            liveActivity: true
         ])
     }
 }

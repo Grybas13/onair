@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.voiceEngine) private var voiceEngine = "groq"
     @AppStorage(SettingsKeys.groqVoice) private var groqVoice = GroqSpeech.defaultVoice
     @AppStorage(DJIdentity.key) private var djName = ""
+    @AppStorage(SettingsKeys.liveActivity) private var liveActivityOn = true
     @State private var diagnosis: String?
     @State private var backgroundTestRunning = false
     @State private var isDiagnosing = false
@@ -125,6 +126,20 @@ struct SettingsView: View {
                     Text("Balsas")
                 } footer: {
                     Text("Orpheus – gyvas, emocingas balsas Groq debesyje (tas pats Groq raktas). Nemokamai ~100 pasisakymų per dieną; pasiekus limitą DJ kalba Apple balsu. Natūralesnį Apple balsą galima atsisiųsti: iPhone Nustatymai → Pritaikymas neįgaliesiems → Įgarsinamas turinys → Balsai → English (Enhanced / Premium). Kalbėjimo greitis taikomas tik Apple balsui. „Fono testas“: paspausk ir per 15 s užrakink telefoną – DJ turi prabilti.")
+                }
+
+                Section {
+                    Toggle("Rodyti užrakintame ekrane", isOn: Binding(
+                        get: { liveActivityOn },
+                        set: { value in
+                            liveActivityOn = value
+                            engine.setLiveActivityEnabled(value)
+                        }
+                    ))
+                } header: {
+                    Text("Live Activity")
+                } footer: {
+                    Text("Užrakintame ekrane ir Dynamic Island rodoma daina, kita daina ir mygtukai 👎 · Keisti · ⏭ · ❤️. Pasirodo įjungus stotį. Jei nesimato – iPhone Nustatymai → OnAir → Live Activities.")
                 }
 
                 Section("Spotify") {

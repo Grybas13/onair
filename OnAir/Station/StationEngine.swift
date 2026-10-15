@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import AVFoundation
+import Combine
 
 /// Stoties „smegenys“: sudaro sąrašą pagal vibe, paleidžia jį Spotify,
 /// seka dainų kaitą, fiksuoja klausymą ir kas N dainų įjungia Dėdį.
@@ -51,6 +52,10 @@ final class StationEngine: ObservableObject {
     private var stationPlaylistURI: String?
     private var lastHeartbeat = Date.distantPast
     private var idleSince: Date?
+    /// „Aklas režimas“: Spotify serveris nemato grojimo, bet telefone muzika groja
+    /// (dažnai su CarPlay). Tada dainų kaitą sekame pagal laiką ir „neseniai grotas“.
+    private var blindSince: Date?
+    private var lastRecentCheck = Date.distantPast
 
     /// Iš anksto paruoštas Dėdžio perėjimas (tekstas + balsas), kad prabiltų be pauzės.
     private struct PreparedSegment {
@@ -72,6 +77,12 @@ final class StationEngine: ObservableObject {
     private let mixPlanSize = 100
     private let vibePlanSize = 40
 
+    /// Dabartinė stotis (Live Activity mygtukams).
+    static var current: StationEngine?
+
+    private let live = LiveActivityController()
+    private var liveObserver: AnyCancellable?
+
     init(api: SpotifyAPI, audio: AudioController, voice: DJVoice,
          store: ListeningStore, curator: MusicCurator, writer: DedisWriter) {
         self.api = api
@@ -80,6 +91,56 @@ final class StationEngine: ObservableObject {
         self.store = store
         self.curator = curator
         self.writer = writer
+        StationEngine.current = self
+        // Bet koks matomas pokytis → Live Activity atnaujinimas (valdiklis pats atmeta nepakitusius).
+        liveObserver = objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in self?.refreshLiveActivity() }
+        }
+    }
+
+    // MARK: - Live Activity
+
+    private var liveState: OnAirActivityAttributes.ContentState {
+        let next: SpotifyTrack? = {
+            guard let index = currentIndex, index + 1 < plan.count else { return nil }
+            return plan[index + 1]
+        }()
+        let preparing = phase == .starting || phase == .wakingSpotify
+        return OnAirActivityAttributes.ContentState(
+            djName: DJIdentity.name,
+            vibe: currentVibe.title,
+            title: nowPlaying.map { DJScript.cleanTitle($0.name) } ?? (preparing ? "Ruošiu eterį…" : "OnAir"),
+            artist: nowPlaying?.artistNames ?? "",
+            nextTitle: next.map { DJScript.cleanTitle($0.name) },
+            nextArtist: next?.primaryArtist,
+            tracksUntilTalk: tracksUntilTalk,
+            isTalking: onMicText != nil,
+            isLiked: isCurrentLiked,
+            isPlaying: isPlaying
+        )
+    }
+
+    private func refreshLiveActivity() {
+        switch phase {
+        case .onAir, .starting, .wakingSpotify:
+            if live.isRunning {
+                live.update(liveState)
+            } else if live.isEnabled && phase == .onAir && UIApplication.shared.applicationState == .active {
+                live.startIfNeeded(liveState)
+            }
+        default:
+            if live.isRunning { live.end() }
+        }
+    }
+
+    /// Nustatymų jungiklis.
+    func setLiveActivityEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: SettingsKeys.liveActivity)
+        if enabled {
+            if phase == .onAir { live.startIfNeeded(liveState) }
+        } else {
+            live.end()
+        }
     }
 
     private var talkEvery: Int {
@@ -103,6 +164,8 @@ final class StationEngine: ObservableObject {
         wakeCancelled = false
         prepared = nil
         trace("Stotis: paleidžiama (vibe: \(currentVibe.title))")
+        // iOS leidžia paleisti Live Activity tik programėlei esant ekrane – todėl dabar, ne vėliau.
+        live.startIfNeeded(liveState)
 
         do {
             try await loadPool()
@@ -421,6 +484,7 @@ final class StationEngine: ObservableObject {
             do { try await api.pause(deviceID: deviceID) } catch { trace("Pauzė nepavyko: \(error.localizedDescription)") }
         }
         phase = .idle
+        live.end()
         store.saveNow()
         trace("Stotis: sustabdyta")
     }
@@ -644,6 +708,7 @@ final class StationEngine: ObservableObject {
     /// Kai programėlė grįžta į ekraną – greitai atnaujinti būseną.
     func refreshSoon() {
         guard phase == .onAir else { return }
+        refreshLiveActivity()
         startMonitor(initialDelay: 0)
     }
 
@@ -745,7 +810,8 @@ final class StationEngine: ObservableObject {
         let elapsed = Date().timeIntervalSince(progressUpdatedAt)
         let remaining = Double(current.durationMs - progressMs) / 1000 - elapsed
         let speech = segment.buffers.reduce(0.0) { $0 + Double($1.frameLength) / $1.format.sampleRate }
-        let leadIn = min(2.0, max(0.8, speech * 0.15))
+        // Spotify serverio „progress“ šiek tiek vėluoja, todėl pradedame ~2–3 s anksčiau.
+        let leadIn = min(3.0, max(2.0, speech * 0.2))
         let delay = remaining - leadIn
         guard delay > 0.3 else { return }
 
@@ -758,12 +824,21 @@ final class StationEngine: ObservableObject {
             defer { self.segueTask = nil }
             guard self.phase == .onAir, self.switchingVibe == nil,
                   let segment = self.prepared, segment.fromURI == fromURI else { return }
-            // Greitas patikrinimas, ar vis dar groja ta pati daina.
-            if let state = try? await self.api.playbackState() {
-                guard state.isPlaying, state.item?.uri == fromURI else {
-                    trace("Perėjimas atšauktas – daina pasikeitė anksčiau")
+            // Greitas patikrinimas: groja ta pati daina (puiku) arba jau kita (kalbame iškart).
+            let state = try? await self.api.playbackState()
+            if let state, state.isPlaying, let item = state.item {
+                let isSame = item.uri == fromURI
+                let isNext = item.uri == segment.nextURI || item.matchKey == segment.nextKey
+                guard isSame || isNext else {
+                    trace("Perėjimas atšauktas – groja netikėta daina")
                     return
                 }
+                if isNext {
+                    trace("Daina pasikeitė kiek anksčiau – DJ kalba iškart")
+                }
+            } else if !self.otherAudioPlaying {
+                trace("Perėjimas atšauktas – muzika negroja")
+                return
             }
             guard !Task.isCancelled else { return }
             self.segueFired = true
@@ -828,14 +903,23 @@ final class StationEngine: ObservableObject {
         if Date().timeIntervalSince(lastHeartbeat) > 120 {
             lastHeartbeat = Date()
             let state = UIApplication.shared.applicationState == .background ? "fone" : "ekrane"
-            trace("Gyvas (\(state)) · garso variklis: \(audio.isEngineRunning ? "veikia" : "SUSTOJĘS")")
+            trace("Gyvas (\(state)) · garso variklis: \(audio.isEngineRunning ? "veikia" : "SUSTOJĘS")\(blindSince != nil ? " · aklas režimas" : "")")
         }
         do {
-            guard let state = try await api.playbackState(), let item = state.item else {
+            let fetched = try await api.playbackState()
+            guard let state = fetched, let item = state.item, state.isPlaying || !otherAudioPlaying else {
+                if otherAudioPlaying, phase == .onAir, let current = nowPlaying ?? lastSeenTrack {
+                    return await handleBlind(current)
+                }
                 isPlaying = false
                 return await handleIdle()
             }
 
+            let wasBlind = blindSince != nil
+            if wasBlind {
+                trace("Spotify serveris vėl mato grojimą – aklas režimas baigtas")
+                blindSince = nil
+            }
             nowPlaying = item
             isPlaying = state.isPlaying
             progressMs = state.progressMs ?? 0
@@ -845,7 +929,8 @@ final class StationEngine: ObservableObject {
                 let previous = lastSeenTrack
                 lastSeenURI = item.uri
                 lastSeenTrack = item
-                await handleTrackChange(from: previous, to: item, progressMs: state.progressMs ?? 0)
+                // Po aklo režimo tai tik pataisymas – DJ ne laiku neprabyla.
+                await handleTrackChange(from: previous, to: item, progressMs: state.progressMs ?? 0, allowTalk: !wasBlind)
             }
 
             guard state.isPlaying else { return await handleIdle() }
@@ -875,6 +960,91 @@ final class StationEngine: ObservableObject {
     }
 
     /// Kai Spotify negroja: tikriname rečiau, o po 10 min. stotis užmiega (kad neiškrautų baterijos).
+    /// Ar telefone groja kita programėlė (Spotify). Tai žinome patys, be Spotify serverio.
+    private var otherAudioPlaying: Bool {
+        AVAudioSession.sharedInstance().isOtherAudioPlaying
+    }
+
+    /// Aklas režimas: dainos kaitą spėjame pagal trukmę ir plano tvarką,
+    /// o „neseniai grotos“ (Spotify jas fiksuoja ir CarPlay metu) leidžia pasitaisyti.
+    private func handleBlind(_ current: SpotifyTrack) async -> Double {
+        idleSince = nil
+        if blindSince == nil {
+            blindSince = Date()
+            isPlaying = true
+            trace("Spotify serveris nemato grojimo, bet muzika groja (pvz. CarPlay) – seku pagal laiką")
+        }
+
+        if Date().timeIntervalSince(lastRecentCheck) > 20 {
+            lastRecentCheck = Date()
+            await reconcileWithRecentlyPlayed()
+        }
+
+        guard let track = nowPlaying else { return 10 }
+        let elapsed = Date().timeIntervalSince(progressUpdatedAt)
+        let remaining = Double(track.durationMs - progressMs) / 1000 - elapsed
+        if remaining <= -1.5 {
+            await advanceBlind(overshoot: -remaining)
+            return 2
+        }
+        if remaining < 32 && remaining > 3 {
+            prefetchHandoffIfNeeded()
+            scheduleSegue()
+        }
+        if remaining > 32 { return min(25, remaining - 28) }
+        if remaining > 17 { return remaining - 15 }
+        return max(0.6, remaining + 1.6)
+    }
+
+    /// Pagal laiką daina turėjo baigtis – laikome, kad groja kita plano daina.
+    private func advanceBlind(overshoot: Double) async {
+        guard let index = currentIndex, index + 1 < plan.count else { return }
+        let next = plan[index + 1]
+        let previous = lastSeenTrack ?? nowPlaying
+        trace("Aklas režimas: pagal laiką toliau – \(next.name)")
+        setVirtualTrack(next, progressMs: Int(overshoot * 1000))
+        await handleTrackChange(from: previous, to: next, progressMs: Int(overshoot * 1000))
+    }
+
+    private func setVirtualTrack(_ track: SpotifyTrack, progressMs value: Int) {
+        lastSeenURI = track.uri
+        lastSeenTrack = track
+        nowPlaying = track
+        isPlaying = true
+        progressMs = max(0, value)
+        progressUpdatedAt = Date()
+    }
+
+    /// Jei „neseniai grotose“ matyti, kad esame atsilikę (pvz. dainą praleidai automobilyje), pasitaisome.
+    private func reconcileWithRecentlyPlayed() async {
+        guard let items = try? await api.recentlyPlayed(limit: 5), let latest = items.first,
+              let finishedIndex = planIndex(of: latest.track) else { return }
+        let nowIndex = finishedIndex + 1
+        guard let index = currentIndex, nowIndex > index, nowIndex < plan.count else { return }
+
+        let next = plan[nowIndex]
+        var progress = 0
+        if let playedAt = Self.parseDate(latest.playedAt) {
+            let seconds = Date().timeIntervalSince(playedAt)
+            if seconds > 0 && seconds * 1000 < Double(next.durationMs) {
+                progress = Int(seconds * 1000)
+            }
+        }
+        trace("Aklas režimas: pagal „neseniai grotas“ pasitaisau – groja \(next.name)")
+        let previous = lastSeenTrack
+        setVirtualTrack(next, progressMs: progress)
+        await handleTrackChange(from: previous, to: next, progressMs: progress, allowTalk: false)
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: value)
+    }
+
     private func handleIdle() async -> Double {
         let now = Date()
         if idleSince == nil { idleSince = now }
@@ -886,7 +1056,7 @@ final class StationEngine: ObservableObject {
         return 15
     }
 
-    private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack, progressMs: Int) async {
+    private func handleTrackChange(from previous: SpotifyTrack?, to current: SpotifyTrack, progressMs: Int, allowTalk: Bool = true) async {
         trace("Nauja daina: \(current.name) – \(current.artistNames)")
         let now = Date()
         if segueTask != nil && !segueFired {
@@ -928,7 +1098,12 @@ final class StationEngine: ObservableObject {
         tracksSinceTalk += 1
         tracksUntilTalk = max(0, talkEvery - tracksSinceTalk)
 
-        if tracksSinceTalk >= talkEvery, let previous, switchingVibe == nil {
+        if !allowTalk && tracksSinceTalk >= talkEvery {
+            // Pataisymas, ne tikra dainų sandūra – DJ prabils kitoje sandūroje.
+            tracksSinceTalk = talkEvery - 1
+            tracksUntilTalk = 1
+            prepared = nil
+        } else if tracksSinceTalk >= talkEvery, let previous, switchingVibe == nil {
             tracksSinceTalk = 0
             tracksUntilTalk = talkEvery
             if let segment = prepared, segment.nextURI == current.uri || segment.nextKey == current.matchKey {

@@ -20,6 +20,9 @@ targets:
     platform: iOS
     sources:
       - path: OnAir
+    dependencies:
+      # Live Activity (užrakintas ekranas, Dynamic Island).
+      - target: OnAirWidget
     scheme: {}
     info:
       path: OnAir/Info.plist
@@ -42,6 +45,7 @@ targets:
         # Leidžia atidaryti Spotify programėlę.
         LSApplicationQueriesSchemes:
           - spotify
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: lt.grybas13.onair
@@ -53,3 +57,27 @@ targets:
         SPOTIFY_CLIENT_ID: ""
         LASTFM_API_KEY: ""
         GROQ_API_KEY: ""
+
+  OnAirWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: OnAirWidget
+      - path: OnAir/Shared
+    info:
+      path: OnAirWidget/Info.plist
+      properties:
+        CFBundleDisplayName: OnAir
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: lt.grybas13.onair.widget
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WIDGET_EXTENSION
+        APPLICATION_EXTENSION_API_ONLY: YES
